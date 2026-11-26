@@ -30,9 +30,8 @@ func TestShellLayout(t *testing.T) {
 	if strings.Contains(view, "AUGUSTIN") || lipgloss.Height(view) > 8 {
 		t.Fatalf("live area should stay compact:\n%s", view)
 	}
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if cmd == nil {
-		t.Fatal("escape did not request exit")
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc}); cmd != nil {
+		t.Fatal("idle escape must not exit")
 	}
 }
 
@@ -103,5 +102,66 @@ func TestCommandOutputGoesToScrollback(t *testing.T) {
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil || next.(shellModel).commandNotice != "" || strings.Contains(next.View(), "openai · test") {
 		t.Fatal("command output was not moved to scrollback")
+	}
+}
+
+func isQuit(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	_, ok := cmd().(tea.QuitMsg)
+	return ok
+}
+
+func TestEscapeInterruptsTurn(t *testing.T) {
+	m := newShellModel("/workspace", "openai", "test", false)
+	m.ctx = context.Background()
+	m.turn = func(ctx context.Context, _ []model.Message, _ string, _ events.Sink) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	m.composer.SetValue("long task")
+	next, run := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := next.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if isQuit(cmd) || !next.(shellModel).interrupting {
+		t.Fatal("escape did not interrupt the turn")
+	}
+	next, _ = next.Update(run()) // returns only because the turn context was canceled
+	got := next.(shellModel)
+	if got.busy || got.composer.Value() != "long task" || !strings.Contains(got.status, "Interrupted") || len(got.history) != 0 {
+		t.Fatalf("interrupt not handled: busy=%v value=%q status=%q", got.busy, got.composer.Value(), got.status)
+	}
+}
+
+func TestCtrlCExitsOnlyOnSecondPress(t *testing.T) {
+	ctrlC := tea.KeyMsg{Type: tea.KeyCtrlC}
+	m := newShellModel("/workspace", "openai", "test", false)
+	m.composer.SetValue("draft")
+	next, cmd := m.Update(ctrlC)
+	if cmd != nil || next.(shellModel).composer.Value() != "" {
+		t.Fatal("first Ctrl+C should clear the draft")
+	}
+	next, _ = next.Update(ctrlC) // returns the 2s disarm tick; running it would block
+	if !next.(shellModel).quitArmed || !strings.Contains(next.View(), "again to exit") {
+		t.Fatal("Ctrl+C on empty input should arm exit")
+	}
+	if _, cmd = next.Update(ctrlC); !isQuit(cmd) {
+		t.Fatal("second Ctrl+C did not exit")
+	}
+	disarmed, _ := next.Update(disarmQuit{})
+	if again, _ := disarmed.Update(ctrlC); !again.(shellModel).quitArmed {
+		t.Fatal("expired Ctrl+C should arm again, not exit")
+	}
+}
+
+func TestCtrlCForceExitsStuckInterrupt(t *testing.T) {
+	m := newShellModel("/workspace", "openai", "test", false)
+	m.busy = true
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if isQuit(cmd) || !next.(shellModel).interrupting {
+		t.Fatal("Ctrl+C during a turn should interrupt first")
+	}
+	if _, cmd = next.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); !isQuit(cmd) {
+		t.Fatal("Ctrl+C during interrupt should exit")
 	}
 }

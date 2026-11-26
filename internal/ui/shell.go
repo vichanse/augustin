@@ -34,9 +34,15 @@ func (s eventSink) TextDelta(text string) { s.delta(text) }
 type liveDelta string
 
 type turnDone struct {
-	answer string
-	err    error
+	answer   string
+	err      error
+	canceled bool
 }
+
+// disarmQuit expires a first Ctrl+C so a later single press does not exit.
+type disarmQuit struct{}
+
+const quitWindow = 2 * time.Second
 
 type shellModel struct {
 	path, provider, model string
@@ -48,6 +54,9 @@ type shellModel struct {
 	turn                  TurnFunc
 	history               []model.Message
 	busy                  bool
+	cancelTurn            context.CancelFunc
+	interrupting          bool
+	quitArmed             bool
 	status                string
 	sink                  events.Sink
 	activity              []string
@@ -152,8 +161,16 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.partialRendered = m.markdown(m.partial)
 		}
 		m.elapsed = time.Since(m.started)
-		m.busy = false
-		if e.err != nil {
+		m.busy, m.interrupting = false, false
+		if m.cancelTurn != nil {
+			m.cancelTurn()
+			m.cancelTurn = nil
+		}
+		if e.canceled {
+			m.status = "Interrupted. Prompt restored; edit it or press Enter to resend."
+			m.composer.SetValue(m.submitted)
+			m.resizeComposer()
+		} else if e.err != nil {
 			m.status = "Request failed: " + SafeText(e.err.Error()) + "; retry your prompt."
 			m.composer.SetValue(m.submitted)
 			m.resizeComposer()
@@ -168,6 +185,9 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.commandNotice = "Cannot save session locally."
 			}
 		}
+		return m, nil
+	case disarmQuit:
+		m.quitArmed = false
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = e.Width, e.Height
@@ -195,8 +215,26 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		switch e.String() {
-		case "esc", "ctrl+c":
-			return m, tea.Quit
+		case "esc":
+			if m.busy {
+				return m.interrupt()
+			}
+			return m, nil
+		case "ctrl+c":
+			switch {
+			case m.busy && !m.interrupting:
+				return m.interrupt()
+			case m.busy || m.quitArmed:
+				// A second press, or one while an interrupt is stuck, always exits.
+				return m, tea.Quit
+			case m.composer.Value() != "":
+				m.composer.Reset()
+				m.resizeComposer()
+				return m, nil
+			default:
+				m.quitArmed = true
+				return m, tea.Tick(quitWindow, func(time.Time) tea.Msg { return disarmQuit{} })
+			}
 		case "alt+enter":
 			msg = tea.KeyMsg{Type: tea.KeyEnter}
 		case "enter", "ctrl+s":
@@ -220,9 +258,13 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.partial = ""
 					m.partialRendered = ""
 					m.lastRender = time.Time{}
+					turnCtx, cancel := context.WithCancel(m.ctx)
+					m.cancelTurn = cancel
+					history := append([]model.Message(nil), m.history...)
 					return m, func() tea.Msg {
-						answer, err := m.turn(m.ctx, append([]model.Message(nil), m.history...), value, m.sink)
-						return turnDone{answer: answer, err: err}
+						answer, err := m.turn(turnCtx, history, value, m.sink)
+						// Providers may surface cancellation as a transport error, so ask the context.
+						return turnDone{answer: answer, err: err, canceled: turnCtx.Err() != nil}
 					}
 				}
 			}
@@ -286,7 +328,7 @@ func (m shellModel) View() string {
 		m.composer.View(),
 		m.commandMenu(),
 		rule,
-		"Enter send · Alt+Enter newline · Esc exit",
+		m.keyHint(),
 	}, "\n")
 	footer = strings.ReplaceAll(footer, "\n\n", "\n")
 	return lipgloss.NewStyle().MaxWidth(w).Render(live + footer)
@@ -347,4 +389,26 @@ func (m *shellModel) resizeComposer() {
 		lines += max(1, (lipgloss.Width(line)+width-1)/width)
 	}
 	m.composer.SetHeight(min(lines, max(1, min(6, m.height/4))))
+}
+
+func (m shellModel) interrupt() (tea.Model, tea.Cmd) {
+	if m.cancelTurn != nil {
+		m.cancelTurn()
+	}
+	m.interrupting = true
+	m.status = "Interrupting…"
+	return m, nil
+}
+
+func (m shellModel) keyHint() string {
+	switch {
+	case m.quitArmed:
+		return "Press Ctrl+C again to exit"
+	case m.interrupting:
+		return "Ctrl+C force exit"
+	case m.busy:
+		return "Esc interrupt"
+	default:
+		return "Enter send · Alt+Enter newline · Ctrl+C exit"
+	}
 }
