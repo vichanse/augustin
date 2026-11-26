@@ -35,8 +35,8 @@ const (
 
 // Event deliberately excludes prompts, arguments, outputs and raw errors.
 type Event struct {
-	Tool          string `json:"tool,omitempty"`
-	Recoverable   bool   `json:"recoverable,omitempty"`
+	Tool         string `json:"tool,omitempty"`
+	Recoverable  bool   `json:"recoverable,omitempty"`
 	Sequence     int    `json:"sequence"`
 	Kind         Kind   `json:"kind"`
 	Iteration    int    `json:"iteration"`
