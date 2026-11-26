@@ -9,9 +9,9 @@ import (
 )
 
 func TestShellLayout(t *testing.T) {
-	m := shellModel{path: "/workspace", provider: "openai", model: "test", width: 80, height: 24}
+	m := newShellModel("/workspace", "openai", "test", false)
 	view := m.View()
-	for _, want := range []string{"AUGUSTIN", "/workspace", "openai", "READ ONLY", "Prompt composer coming next"} {
+	for _, want := range []string{"AUGUSTIN", "/workspace", "openai", "READ ONLY", "Ctrl+S submit preview"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("missing %q", want)
 		}
@@ -26,5 +26,16 @@ func TestShellLayout(t *testing.T) {
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd == nil {
 		t.Fatal("escape did not request exit")
+	}
+}
+
+func TestComposerSubmission(t *testing.T) {
+	m := newShellModel("/workspace", "openai", "test", false)
+	m.composer.Focus()
+	m.composer.SetValue("first line\nsecond line")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	got := next.(shellModel)
+	if got.submitted != "first line\nsecond line" || got.composer.Value() != "" {
+		t.Fatal("multiline prompt was not captured and reset")
 	}
 }
