@@ -11,6 +11,7 @@ import (
 	"github.com/vichanse/augustin/internal/events"
 
 	"github.com/vichanse/augustin/internal/model"
+	"github.com/vichanse/augustin/internal/version"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
@@ -256,7 +257,7 @@ func (m shellModel) View() string {
 	}
 	rule := m.paint(strings.Repeat("─", w), "240")
 	logo := m.paint("  ▄█▄  \n ██ ██ \n██▄▄▄██\n██   ██", "99")
-	meta := m.paint("AUGUSTIN", "99") + "\nThe Harness-First Coding Agent\n" +
+	meta := m.paint("AUGUSTIN", "99") + " " + version.Current() + "\nThe Harness-First Coding Agent\n" +
 		SafeText(m.provider) + " · " + SafeText(m.model) + "\n" + SafeText(m.path)
 	header := lipgloss.JoinHorizontal(lipgloss.Top, logo, "   ", meta)
 	header = lipgloss.NewStyle().MaxWidth(w).Render(header)
