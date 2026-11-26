@@ -75,7 +75,7 @@ func run(args []string, out, errOut io.Writer) int {
 				fmt.Fprintln(errOut, "cannot initialize provider")
 				return 2
 			}
-			loop := agent.Loop{Provider: p, Executor: tools.New(w.Handlers(), []string{"read_file", "list_files", "workspace_overview"}), MaxIterations: c.MaxIterations, Budget: c.Budget, ReserveFinalResponse: true}
+			loop := agent.Loop{Provider: p, Executor: tools.NewWithPolicy(w.Handlers(), []string{"read_file", "list_files", "workspace_overview"}, tools.ReadPolicy()), MaxIterations: c.MaxIterations, Budget: c.Budget, ReserveFinalResponse: true}
 			turn := func(ctx context.Context, history []model.Message, prompt string, sink events.Sink) (string, error) {
 				messages := append([]model.Message{systemMessage()}, history...)
 				messages = append(messages, model.Message{Role: model.RoleUser, Content: prompt})
@@ -144,7 +144,7 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, lookup c
 	}
 	loop := agent.Loop{
 		Provider:             p,
-		Executor:             tools.New(w.Handlers(), []string{"read_file", "list_files", "workspace_overview"}),
+		Executor:             tools.NewWithPolicy(w.Handlers(), []string{"read_file", "list_files", "workspace_overview"}, tools.ReadPolicy()),
 		MaxIterations:        c.MaxIterations,
 		Budget:               c.Budget,
 		ReserveFinalResponse: true,

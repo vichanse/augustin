@@ -16,6 +16,7 @@ type Handler func(context.Context, model.ToolCall) (string, error)
 type Registry struct {
 	handlers map[string]Handler
 	allowed  map[string]bool
+	policy   *Policy
 }
 
 // New copies the configuration. Unlisted tools are denied by default.
@@ -37,6 +38,11 @@ func (r *Registry) Execute(ctx context.Context, call model.ToolCall) (string, er
 	handler := r.handlers[call.Name]
 	if !r.allowed[call.Name] || handler == nil {
 		return "", fmt.Errorf("%w: %q", ErrDenied, call.Name)
+	}
+	if r.policy != nil {
+		if err := r.policy.authorize(ctx, call); err != nil {
+			return "", err
+		}
 	}
 	return handler(ctx, call)
 }
