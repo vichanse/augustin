@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/vichanse/augustin/internal/version"
 )
 
 type slashCommand struct {
@@ -17,6 +18,7 @@ var slashCommands = []slashCommand{
 	{"/clear", "Clear conversation"},
 	{"/status", "Show last turn statistics"},
 	{"/model", "Show active model"},
+	{"/version", "Show installed version"},
 	{"/tools", "List available tools"},
 	{"/trust", "Show workspace permissions"},
 	{"/permissions", "Show harness capability policy"},
@@ -88,6 +90,8 @@ func (m shellModel) runCommand(command string) (tea.Model, tea.Cmd) {
 		m.commandNotice = "Conversation cleared."
 	case "/status":
 		m.commandNotice = fmt.Sprintf("READ ONLY · Last turn: %d tools · %d tokens · %s", m.toolCalls, m.tokens, m.elapsed)
+	case "/version":
+		m.commandNotice = "Augustin Code " + version.Current()
 	case "/model":
 		m.commandNotice = SafeText(m.provider) + " · " + SafeText(m.model)
 	case "/tools":
