@@ -61,7 +61,7 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, lookup c
 		events.Sink
 		Err() error
 	}
-	if *jsonMode {
+	if *jsonMode || !ui.Interactive(errOut) {
 		sink = events.NewJSONL(errOut)
 	} else {
 		sink = ui.New(errOut)
@@ -88,7 +88,7 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, lookup c
 		fmt.Fprintln(errOut, "Augustin run failed; inspect execution events")
 		return 1
 	}
-	if _, err := fmt.Fprintln(out, result.Messages[len(result.Messages)-1].Content); err != nil {
+	if _, err := fmt.Fprintln(out, ui.SafeText(result.Messages[len(result.Messages)-1].Content)); err != nil {
 		return 1
 	}
 	return 0

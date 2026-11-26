@@ -41,12 +41,12 @@ func (r *Renderer) Emit(e events.Event) {
 		r.output += e.OutputTokens
 	case events.ToolRequested:
 		r.calls++
-		r.line("  Tool: %s", e.Tool)
+		r.line("  Tool: %s", SafeText(e.Tool))
 	case events.ToolCompleted:
-		r.line("  [OK] %s", e.Tool)
+		r.line("  [OK] %s", SafeText(e.Tool))
 	case events.ToolFailed:
-		r.line("  [!] %s: %s (recoverable: %t)", e.Tool, e.Reason, e.Recoverable)
+		r.line("  [!] %s: %s (recoverable: %t)", SafeText(e.Tool), SafeText(string(e.Reason)), e.Recoverable)
 	case events.AgentCompleted, events.AgentFailed:
-		r.line("  %s | %d iterations | %d tools | %d input / %d output tokens | %s", e.Reason, e.Iteration, r.calls, r.input, r.output, time.Since(r.start).Round(time.Millisecond))
+		r.line("  %s | %d iterations | %d tools | %d input / %d output tokens | %s", SafeText(string(e.Reason)), e.Iteration, r.calls, r.input, r.output, time.Since(r.start).Round(time.Millisecond))
 	}
 }
