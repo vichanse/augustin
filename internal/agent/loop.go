@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/vichanse/augustin/internal/events"
 	"github.com/vichanse/augustin/internal/model"
 )
 
 var ErrIterationLimit = errors.New("agent iteration limit reached")
+var ErrBudgetExceeded = errors.New("execution budget exceeded")
 var ErrInvalidResponse = errors.New("invalid model response")
 
 // Executor must enforce authorization independently of model instructions.
@@ -24,11 +26,22 @@ type Loop struct {
 	Executor      Executor
 	MaxIterations int
 	Events        events.Sink
+	Budget        Budget
+}
+
+// Budget bounds tool execution and cooperative run duration.
+// Zero values select conservative defaults.
+type Budget struct {
+	MaxToolCalls   int
+	MaxOutputBytes int
+	Timeout        time.Duration
 }
 
 type Result struct {
-	Messages   []model.Message
-	Iterations int
+	Messages    []model.Message
+	Iterations  int
+	ToolCalls   int
+	OutputBytes int
 }
 
 func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr error) {
@@ -55,6 +68,8 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 			reason = events.Deadline
 		case errors.Is(runErr, ErrIterationLimit):
 			reason = events.IterationLimit
+		case errors.Is(runErr, ErrBudgetExceeded):
+			reason = events.BudgetExceeded
 		case errors.Is(runErr, ErrInvalidResponse):
 			reason = events.InvalidModel
 		}
@@ -63,6 +78,21 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 	if l.Provider == nil || l.MaxIterations <= 0 {
 		return result, errors.New("provider and positive iteration limit required")
 	}
+	b := l.Budget
+	if b.MaxToolCalls < 0 || b.MaxOutputBytes < 0 || b.Timeout < 0 {
+		return result, errors.New("negative execution budget")
+	}
+	if b.MaxToolCalls == 0 {
+		b.MaxToolCalls = 32
+	}
+	if b.MaxOutputBytes == 0 {
+		b.MaxOutputBytes = 2 << 20
+	}
+	if b.Timeout == 0 {
+		b.Timeout = 2 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, b.Timeout)
+	defer cancel()
 	allowed := make(map[string]bool, len(req.Tools))
 	for _, tool := range req.Tools {
 		allowed[tool.Name] = true
@@ -101,6 +131,9 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 		default:
 			return result, fmt.Errorf("%w: finish reason %q", ErrInvalidResponse, response.FinishReason)
 		}
+		if len(msg.ToolCalls) > b.MaxToolCalls-result.ToolCalls {
+			return result, fmt.Errorf("%w: tool calls", ErrBudgetExceeded)
+		}
 		seen := make(map[string]bool)
 		for _, call := range msg.ToolCalls {
 			if call.ID == "" || seen[call.ID] || !allowed[call.Name] || !json.Valid(call.Arguments) {
@@ -114,6 +147,7 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 				return result, err
 			}
 			emit(events.Event{Kind: events.ToolRequested})
+			result.ToolCalls++
 			output, err := l.Executor.Execute(ctx, call)
 			if err != nil {
 				emit(events.Event{Kind: events.ToolFailed})
@@ -122,6 +156,11 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 			if err := ctx.Err(); err != nil {
 				return result, err
 			}
+			if len(output) > b.MaxOutputBytes-result.OutputBytes {
+				emit(events.Event{Kind: events.ToolFailed, Reason: events.BudgetExceeded})
+				return result, fmt.Errorf("%w: tool output", ErrBudgetExceeded)
+			}
+			result.OutputBytes += len(output)
 			emit(events.Event{Kind: events.ToolCompleted})
 			result.Messages = append(result.Messages, model.Message{
 				Role: model.RoleTool, Content: output, ToolCallID: call.ID,
