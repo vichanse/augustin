@@ -20,6 +20,11 @@ var slashCommands = []slashCommand{
 	{"/tools", "List available tools"},
 	{"/trust", "Show workspace permissions"},
 	{"/exit", "Exit Augustin"},
+	{"/sessions", "List saved sessions"},
+	{"/resume", "Resume a session by ID"},
+	{"/new", "Start a new conversation"},
+	{"/rename", "Rename current session"},
+	{"/delete", "Delete a session by ID"},
 }
 
 func matchingCommands(value string) []slashCommand {
@@ -61,14 +66,16 @@ func (m shellModel) runCommand(command string) (tea.Model, tea.Cmd) {
 	m.composer.Reset()
 	m.commandIndex = 0
 	m.scroll = 0
-	switch command {
+	name, _, _ := strings.Cut(command, " ")
+	switch name {
 	case "/help":
 		var lines []string
 		for _, item := range slashCommands {
 			lines = append(lines, item.name+" — "+item.description)
 		}
 		m.commandNotice = strings.Join(lines, "\n")
-	case "/clear":
+	case "/clear", "/new":
+		m.session = savedSession{}
 		m.history = nil
 		m.rendered = nil
 		m.turnDetails = nil
@@ -85,6 +92,8 @@ func (m shellModel) runCommand(command string) (tea.Model, tea.Cmd) {
 		m.commandNotice = "Read-only tools: workspace_overview, list_files, read_file"
 	case "/trust":
 		m.commandNotice = "Trusted workspace: " + SafeText(m.path) + "\nEditing and command execution disabled."
+	case "/sessions", "/resume", "/rename", "/delete":
+		m.sessionCommand(command)
 	case "/exit":
 		return m, tea.Quit
 	default:
