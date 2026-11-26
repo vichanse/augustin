@@ -50,7 +50,7 @@ type dashboardModel struct {
 	rows                    []string
 	status                  string
 	input, output, calls    int
-	failed, finished        bool
+	failed, finished         bool
 }
 
 func (m dashboardModel) Init() tea.Cmd { return nil }
