@@ -60,7 +60,7 @@ func TestConversationTurn(t *testing.T) {
 	if cmd == nil || !next.(shellModel).busy {
 		t.Fatal("turn did not start")
 	}
-	next, _ = next.Update(cmd())
+	next, _ = next.Update(turnResult(t, cmd))
 	got := next.(shellModel)
 	if got.busy || len(got.history) != 2 || got.history[1].Content != "world" {
 		t.Fatal("turn was not retained")
@@ -74,7 +74,7 @@ func TestLiveHarnessEvents(t *testing.T) {
 	next, _ = next.Update(liveEvent(events.Event{Kind: events.ModelCompleted, InputTokens: 10, OutputTokens: 5}))
 	next, _ = next.Update(liveEvent(events.Event{Kind: events.ToolFailed, Tool: "list_files", Reason: "directory_required", Recoverable: true}))
 	got := next.(shellModel)
-	if got.toolCalls != 1 || got.tokens != 15 || !strings.Contains(strings.Join(got.activity, "\n"), "Recoverable: list_files") {
+	if got.toolCalls != 1 || got.tokens != 15 || strings.Join(got.activity, "\n") != "! list_files (directory_required)" {
 		t.Fatalf("unexpected telemetry: %+v", got.activity)
 	}
 }
@@ -126,7 +126,7 @@ func TestEscapeInterruptsTurn(t *testing.T) {
 	if isQuit(cmd) || !next.(shellModel).interrupting {
 		t.Fatal("escape did not interrupt the turn")
 	}
-	next, _ = next.Update(run()) // returns only because the turn context was canceled
+	next, _ = next.Update(turnResult(t, run)) // returns only because the turn context was canceled
 	got := next.(shellModel)
 	if got.busy || got.composer.Value() != "long task" || !strings.Contains(got.status, "Interrupted") || len(got.history) != 0 {
 		t.Fatalf("interrupt not handled: busy=%v value=%q status=%q", got.busy, got.composer.Value(), got.status)
@@ -163,5 +163,60 @@ func TestCtrlCForceExitsStuckInterrupt(t *testing.T) {
 	}
 	if _, cmd = next.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); !isQuit(cmd) {
 		t.Fatal("Ctrl+C during interrupt should exit")
+	}
+}
+
+// turnResult runs the batched commands of a submit and returns the turn outcome.
+func turnResult(t *testing.T, cmd tea.Cmd) tea.Msg {
+	t.Helper()
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatal("submit should batch the spinner and the turn")
+	}
+	for _, c := range batch {
+		if msg, ok := c().(turnDone); ok {
+			return msg
+		}
+	}
+	t.Fatal("no turn result")
+	return nil
+}
+
+func TestToolActivityShowsTarget(t *testing.T) {
+	m := newShellModel("/workspace", "openai", "test", false)
+	m.busy = true
+	steps := []tea.Msg{
+		liveEvent(events.Event{Kind: events.ToolRequested, Tool: "read_file"}),
+		liveToolCall(model.ToolCall{Name: "read_file", Arguments: []byte(`{"path":"internal/agent/loop.go"}`)}),
+		liveEvent(events.Event{Kind: events.ToolCompleted, Tool: "read_file"}),
+		liveEvent(events.Event{Kind: events.ToolRequested, Tool: "list_files"}),
+		liveToolCall(model.ToolCall{Name: "list_files", Arguments: []byte(`{}`)}),
+	}
+	var next tea.Model = m
+	for _, msg := range steps {
+		next, _ = next.Update(msg)
+	}
+	got := strings.Join(next.(shellModel).activity, "\n")
+	if got != "✓ Read(internal/agent/loop.go)\n◌ List(.)" {
+		t.Fatalf("unexpected activity:\n%s", got)
+	}
+}
+
+func TestDescribeToolSanitizesTarget(t *testing.T) {
+	got := describeTool(model.ToolCall{Name: "read_file", Arguments: []byte(`{"path":"a\u001b[31m\nb/` + strings.Repeat("x", 80) + `"}`)})
+	if strings.ContainsAny(got, "\x1b\n") || len([]rune(got)) > 67 || !strings.HasPrefix(got, "Read(…") {
+		t.Fatalf("unsafe or unbounded label: %q", got)
+	}
+}
+
+func TestSpinnerStopsBetweenTurns(t *testing.T) {
+	m := newShellModel("/workspace", "openai", "test", false)
+	if _, cmd := m.Update(m.spinner.Tick()); cmd != nil {
+		t.Fatal("spinner kept ticking while idle")
+	}
+	m.busy, m.status = true, "Working…"
+	next, cmd := m.Update(m.spinner.Tick())
+	if cmd == nil || !strings.Contains(next.View(), "Working…") {
+		t.Fatal("spinner not ticking during a turn")
 	}
 }

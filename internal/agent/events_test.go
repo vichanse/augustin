@@ -60,3 +60,25 @@ func TestFailureEvents(t *testing.T) {
 		t.Fatalf("missing failure metadata: %s", buf.String())
 	}
 }
+
+type displaySink struct{ calls []model.ToolCall }
+
+func (s *displaySink) Emit(events.Event)            {}
+func (s *displaySink) ToolCall(call model.ToolCall) { s.calls = append(s.calls, call) }
+
+func TestToolCallDisplayHook(t *testing.T) {
+	sink := &displaySink{}
+	p := modeltest.New(
+		modeltest.Step{Response: toolResponse("read")},
+		modeltest.Step{Response: model.Response{FinishReason: model.FinishStop, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+	)
+	l := Loop{Provider: p, MaxIterations: 2, Events: sink, Executor: executorFunc(func(context.Context, model.ToolCall) (string, error) {
+		return "ok", nil
+	})}
+	if _, err := l.Run(context.Background(), model.Request{Tools: []model.ToolDefinition{{Name: "read"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.calls) != 1 || sink.calls[0].Name != "read" {
+		t.Fatalf("display hook not called with the tool call: %+v", sink.calls)
+	}
+}

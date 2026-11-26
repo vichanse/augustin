@@ -258,6 +258,12 @@ func runTrust(args []string, out, errOut io.Writer) int {
 	return 0
 }
 
+func (d *turnDiagnostic) ToolCall(call model.ToolCall) {
+	if sink, ok := d.sink.(interface{ ToolCall(model.ToolCall) }); ok {
+		sink.ToolCall(call)
+	}
+}
+
 func (d *turnDiagnostic) TextDelta(text string) {
 	if sink, ok := d.sink.(interface{ TextDelta(string) }); ok {
 		sink.TextDelta(text)
