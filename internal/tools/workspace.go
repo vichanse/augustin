@@ -40,21 +40,28 @@ func (w *Workspace) Handlers() map[string]Handler {
 }
 
 func pathArgument(call model.ToolCall) (string, error) {
-	var args struct {
-		Path string
-	}
-	if err := json.Unmarshal(call.Arguments, &args); err != nil {
+	var args map[string]json.RawMessage
+	if err := json.Unmarshal(call.Arguments, &args); err != nil || args == nil {
 		return "", ErrInvalidArguments
 	}
-	if !filepath.IsLocal(args.Path) {
+	var path string
+	for key, value := range args {
+		if key != "path" || string(value) == "null" || json.Unmarshal(value, &path) != nil {
+			return "", ErrInvalidArguments
+		}
+	}
+	if path == "" && call.Name == "list_files" {
+		path = "."
+	}
+	if !filepath.IsLocal(path) {
 		return "", ErrInvalidArguments
 	}
-	for _, part := range strings.Split(filepath.ToSlash(args.Path), "/") {
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
 		if part == ".." {
 			return "", ErrDenied
 		}
 	}
-	return args.Path, nil
+	return path, nil
 }
 
 func (w *Workspace) readFile(ctx context.Context, call model.ToolCall) (string, error) {
