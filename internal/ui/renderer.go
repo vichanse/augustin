@@ -10,9 +10,9 @@ import (
 )
 
 type Renderer struct {
-	out io.Writer
-	err error
-	start time.Time
+	out                  io.Writer
+	err                  error
+	start                time.Time
 	input, output, calls int
 }
 
