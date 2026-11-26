@@ -49,10 +49,10 @@ func run(args []string, out, errOut io.Writer) int {
 				return 2
 			}
 			loop := agent.Loop{Provider: p, Executor: tools.New(w.Handlers(), []string{"read_file", "list_files"}), MaxIterations: c.MaxIterations, Budget: c.Budget, ReserveFinalResponse: true}
-			turn := func(ctx context.Context, history []model.Message, prompt string) (string, error) {
+			turn := func(ctx context.Context, history []model.Message, prompt string, sink events.Sink) (string, error) {
 				messages := append([]model.Message{systemMessage()}, history...)
 				messages = append(messages, model.Message{Role: model.RoleUser, Content: prompt})
-				diagnostic := &turnDiagnostic{}
+				diagnostic := &turnDiagnostic{sink: sink}
 				current := loop
 				current.Events = diagnostic
 				result, err := current.Run(ctx, codingRequest(messages))
@@ -159,9 +159,13 @@ func codingRequest(messages []model.Message) model.Request {
 
 type turnDiagnostic struct {
 	summary string
+	sink    events.Sink
 }
 
 func (d *turnDiagnostic) Emit(e events.Event) {
+	if d.sink != nil {
+		d.sink.Emit(e)
+	}
 	switch e.Kind {
 	case events.AgentStarted:
 		d.summary = "execution_error"
