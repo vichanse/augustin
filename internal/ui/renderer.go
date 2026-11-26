@@ -6,11 +6,14 @@ import (
 	"io"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/vichanse/augustin/internal/events"
 )
 
 type Renderer struct {
 	out                  io.Writer
+	color                bool
 	err                  error
 	start                time.Time
 	input, output, calls int
@@ -18,6 +21,17 @@ type Renderer struct {
 
 func New(out io.Writer) *Renderer {
 	return &Renderer{out: out}
+}
+
+func NewStyled(out io.Writer, color bool) *Renderer {
+	return &Renderer{out: out, color: color}
+}
+
+func (r *Renderer) paint(value, color string, bold bool) string {
+	if !r.color {
+		return value
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Bold(bold).Render(value)
 }
 
 func (r *Renderer) Err() error { return r.err }
@@ -33,7 +47,8 @@ func (r *Renderer) Emit(e events.Event) {
 	case events.AgentStarted:
 		r.start = time.Now()
 		r.input, r.output, r.calls = 0, 0, 0
-		r.line("Augustin | Read-only coding agent")
+		r.line("%s | %s", r.paint("Augustin", "99", true), r.paint("Read-only coding agent", "78", false))
+		r.line("  The Harness-First Coding Agent")
 	case events.ModelRequested:
 		r.line("  Analyzing (iteration %d)...", e.Iteration)
 	case events.ModelCompleted:
@@ -43,10 +58,14 @@ func (r *Renderer) Emit(e events.Event) {
 		r.calls++
 		r.line("  Tool: %s", SafeText(e.Tool))
 	case events.ToolCompleted:
-		r.line("  [OK] %s", SafeText(e.Tool))
+		r.line("  %s %s", r.paint("[OK]", "78", true), SafeText(e.Tool))
 	case events.ToolFailed:
-		r.line("  [!] %s: %s (recoverable: %t)", SafeText(e.Tool), SafeText(string(e.Reason)), e.Recoverable)
+		r.line("  %s %s: %s (recoverable: %t)", r.paint("[!]", "214", true), SafeText(e.Tool), SafeText(string(e.Reason)), e.Recoverable)
 	case events.AgentCompleted, events.AgentFailed:
-		r.line("  %s | %d iterations | %d tools | %d input / %d output tokens | %s", SafeText(string(e.Reason)), e.Iteration, r.calls, r.input, r.output, time.Since(r.start).Round(time.Millisecond))
+		color := "78"
+		if e.Kind == events.AgentFailed {
+			color = "203"
+		}
+		r.line("  %s | %d iterations | %d tools | %d input / %d output tokens | %s", r.paint(SafeText(string(e.Reason)), color, true), e.Iteration, r.calls, r.input, r.output, time.Since(r.start).Round(time.Millisecond))
 	}
 }
