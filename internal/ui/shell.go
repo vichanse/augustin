@@ -17,7 +17,6 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -68,6 +67,7 @@ type shellModel struct {
 	activity              []string
 	toolLabel             string
 	spinner               spinner.Model
+	mdStyle               string
 	started               time.Time
 	elapsed               time.Duration
 	toolCalls             int
@@ -100,7 +100,7 @@ func newShellModel(path, provider, model string, color bool) shellModel {
 	if color {
 		spin.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("99"))
 	}
-	return shellModel{path: path, provider: provider, model: model, color: color, width: 80, height: 24, composer: composer, spinner: spin}
+	return shellModel{path: path, provider: provider, model: model, color: color, width: 80, height: 24, composer: composer, spinner: spin, mdStyle: "dark"}
 }
 
 func (m shellModel) Init() tea.Cmd {
@@ -373,6 +373,9 @@ func (m shellModel) liveArea() string {
 
 func RunShell(ctx context.Context, in io.Reader, out io.Writer, path, provider, model string, color bool, turn TurnFunc) error {
 	m := newShellModel(path, provider, model, color)
+	if color {
+		m.mdStyle = markdownStyle(out) // query once, before Bubble Tea owns the terminal input
+	}
 	if os.Getenv("AUGUSTIN_SAVE_SESSIONS") == "true" {
 		dir, err := sessionDirectory(path)
 		if err != nil {
@@ -413,19 +416,7 @@ func (m shellModel) activitySummary() string {
 }
 
 func (m shellModel) markdown(answer string) string {
-	safe := SafeText(answer)
-	if !m.color {
-		return safe
-	}
-	renderer, err := glamour.NewTermRenderer(glamour.WithStandardStyle("dark"), glamour.WithWordWrap(max(20, m.width-4)))
-	if err != nil {
-		return safe
-	}
-	rendered, err := renderer.Render(safe)
-	if err != nil {
-		return safe
-	}
-	return strings.TrimSpace(rendered)
+	return strings.TrimSpace(answerWidth(answer, m.color, max(20, m.width-4), m.mdStyle))
 }
 
 func (m *shellModel) resizeComposer() {

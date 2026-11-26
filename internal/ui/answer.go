@@ -5,12 +5,13 @@ import (
 	"os"
 
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/term"
 )
 
 // Answer formats sanitized model text for a color-capable terminal.
 func Answer(content string, styled bool) string {
-	return answerWidth(content, styled, 80)
+	return answerWidth(content, styled, 80, "dark")
 }
 
 func AnswerForOutput(content string, styled bool, out io.Writer) string {
@@ -20,15 +21,24 @@ func AnswerForOutput(content string, styled bool, out io.Writer) string {
 			width = max(20, min(w-2, 120))
 		}
 	}
-	return answerWidth(content, styled, width)
+	return answerWidth(content, styled, width, markdownStyle(out))
 }
 
-func answerWidth(content string, styled bool, width int) string {
+// markdownStyle picks the glamour theme matching the terminal background.
+// Unknown backgrounds count as dark, the lipgloss default.
+func markdownStyle(out io.Writer) string {
+	if lipgloss.NewRenderer(out).HasDarkBackground() {
+		return "dark"
+	}
+	return "light"
+}
+
+func answerWidth(content string, styled bool, width int, style string) string {
 	content = SafeText(content)
 	if !styled {
 		return content
 	}
-	renderer, err := glamour.NewTermRenderer(glamour.WithStandardStyle("dark"), glamour.WithWordWrap(width))
+	renderer, err := glamour.NewTermRenderer(glamour.WithStandardStyle(style), glamour.WithWordWrap(width))
 	if err != nil {
 		return content
 	}
