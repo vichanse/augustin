@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/vichanse/augustin/internal/model"
@@ -19,6 +21,7 @@ const maxBody = 4 << 20
 
 type Provider struct {
 	key, name string
+	maxTokens int
 	client    *http.Client
 	url       string
 }
@@ -29,7 +32,15 @@ func New(key, name string) (*Provider, error) {
 	if key == "" || name == "" {
 		return nil, errors.New("API key and model required")
 	}
-	return &Provider{key: key, name: name, url: endpoint, client: &http.Client{
+	maxTokens := 8192
+	if value := os.Getenv("AUGUSTIN_MAX_COMPLETION_TOKENS"); value != "" {
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 1024 || n > 32768 {
+			return nil, errors.New("invalid completion token limit")
+		}
+		maxTokens = n
+	}
+	return &Provider{key: key, name: name, maxTokens: maxTokens, url: endpoint, client: &http.Client{
 		Timeout: 60 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -75,7 +86,10 @@ func (p *Provider) complete(ctx context.Context, req model.Request, delta func(s
 		Store               bool      `json:"store"`
 		Stream              bool      `json:"stream,omitempty"`
 		StreamOptions       any       `json:"stream_options,omitempty"`
-	}{Model: p.name, MaxCompletionTokens: 4096}
+	}{Model: p.name, MaxCompletionTokens: p.maxTokens}
+	if payload.MaxCompletionTokens == 0 {
+		payload.MaxCompletionTokens = 8192
+	}
 	if delta != nil {
 		payload.Stream = true
 		payload.StreamOptions = map[string]bool{"include_usage": true}
