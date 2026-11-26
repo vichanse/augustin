@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -62,6 +63,8 @@ type shellModel struct {
 	lastRender            time.Time
 	commandIndex          int
 	commandNotice         string
+	sessionDir            string
+	session               savedSession
 }
 
 func newShellModel(path, provider, model string, color bool) shellModel {
@@ -150,6 +153,9 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.rendered = m.rendered[len(m.rendered)-10:]
 			}
 			m.scroll = 0
+			if err := m.saveSession(); err != nil {
+				m.commandNotice = "Cannot save session locally."
+			}
 		}
 		return m, nil
 	case tea.WindowSizeMsg:
@@ -308,6 +314,14 @@ func (m shellModel) View() string {
 
 func RunShell(ctx context.Context, in io.Reader, out io.Writer, path, provider, model string, color bool, turn TurnFunc) error {
 	m := newShellModel(path, provider, model, color)
+	if os.Getenv("AUGUSTIN_SAVE_SESSIONS") == "true" {
+		dir, err := sessionDirectory(path)
+		if err != nil {
+			return err
+		}
+		m.sessionDir = dir
+		m.commandNotice = "Local session storage enabled. Conversations may contain sensitive code."
+	}
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	m.ctx, m.turn = sessionCtx, turn
