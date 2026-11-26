@@ -40,8 +40,11 @@ func New(key, name string) (*Provider, error) {
 		}
 		maxTokens = n
 	}
+	// Client.Timeout would also cap streamed body reads; the caller's ctx bounds total duration.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 60 * time.Second
 	return &Provider{key: key, name: name, maxTokens: maxTokens, url: endpoint, client: &http.Client{
-		Timeout: 60 * time.Second,
+		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
