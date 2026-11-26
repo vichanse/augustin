@@ -1,0 +1,5 @@
+package discount
+
+func FinalPrice(price, percent int) int {
+	return price + price*percent/100
+}
