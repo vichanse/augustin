@@ -69,7 +69,6 @@ func (m shellModel) runCommand(command string) (tea.Model, tea.Cmd) {
 	m.composer.Reset()
 	m.resizeComposer()
 	m.commandIndex = 0
-	m.scroll = 0
 	name, _, _ := strings.Cut(command, " ")
 	switch name {
 	case "/help":
@@ -81,8 +80,6 @@ func (m shellModel) runCommand(command string) (tea.Model, tea.Cmd) {
 	case "/clear", "/new":
 		m.session = savedSession{}
 		m.history = nil
-		m.rendered = nil
-		m.turnDetails = nil
 		m.activity = nil
 		m.partial, m.partialRendered = "", ""
 		m.status, m.submitted = "", ""

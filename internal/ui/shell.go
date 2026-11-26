@@ -55,9 +55,7 @@ type shellModel struct {
 	elapsed               time.Duration
 	toolCalls             int
 	tokens                int
-	scroll                int
-	turnDetails           []string
-	rendered              []string
+	pending               []string
 	partial               string
 	partialRendered       string
 	lastRender            time.Time
@@ -85,10 +83,28 @@ func newShellModel(path, provider, model string, color bool) shellModel {
 }
 
 func (m shellModel) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, tea.SetWindowTitle("▲ Augustin Code"))
+	return tea.Batch(textarea.Blink, tea.SetWindowTitle("▲ Augustin Code"), tea.Println(m.banner()))
 }
 
+// Update prints finished output once into the terminal scrollback, so native
+// scrolling, selection and search keep working; View only draws the live area.
 func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	s := next.(shellModel)
+	if s.commandNotice != "" {
+		s.pending = append(s.pending, s.commandNotice)
+		s.commandNotice = ""
+	}
+	if len(s.pending) == 0 {
+		return s, cmd
+	}
+	// One Println keeps ordering; Batch would run several prints concurrently.
+	text := strings.Join(s.pending, "\n\n") + "\n"
+	s.pending = nil
+	return s, tea.Sequence(tea.Println(text), cmd)
+}
+
+func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch e := msg.(type) {
 	case liveDelta:
 		if m.busy {
@@ -147,13 +163,7 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.history = append([]model.Message(nil), m.history[len(m.history)-20:]...)
 			}
 			m.status = ""
-			m.turnDetails = append(m.turnDetails, m.activitySummary())
-			m.rendered = append(m.rendered, m.markdown(e.answer))
-			if len(m.turnDetails) > 10 {
-				m.turnDetails = m.turnDetails[len(m.turnDetails)-10:]
-				m.rendered = m.rendered[len(m.rendered)-10:]
-			}
-			m.scroll = 0
+			m.pending = append(m.pending, m.userLine(m.submitted)+"\n"+m.activitySummary(), m.paint("Augustin", "99")+"\n"+m.markdown(e.answer))
 			if err := m.saveSession(); err != nil {
 				m.commandNotice = "Cannot save session locally."
 			}
@@ -162,12 +172,6 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = e.Width, e.Height
 		m.composer.SetWidth(max(1, e.Width-2))
-		m.rendered = nil
-		for _, msg := range m.history {
-			if msg.Role == model.RoleAssistant {
-				m.rendered = append(m.rendered, m.markdown(msg.Content))
-			}
-		}
 	case tea.KeyMsg:
 		if !m.busy {
 			matches := matchingCommands(m.composer.Value())
@@ -193,12 +197,6 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch e.String() {
 		case "esc", "ctrl+c":
 			return m, tea.Quit
-		case "pgup":
-			m.scroll += max(1, m.height/2)
-			return m, nil
-		case "pgdown":
-			m.scroll = max(0, m.scroll-max(1, m.height/2))
-			return m, nil
 		case "alt+enter":
 			msg = tea.KeyMsg{Type: tea.KeyEnter}
 		case "enter", "ctrl+s":
@@ -210,7 +208,6 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m.runCommand(value)
 				}
 				m.commandNotice = ""
-				m.scroll = 0
 				m.submitted = value
 				m.composer.Reset()
 				m.resizeComposer()
@@ -249,71 +246,50 @@ func (m shellModel) paint(s, color string) string {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render(s)
 }
 
-func (m shellModel) View() string {
-	w := max(1, m.width)
-	h := max(1, m.height)
-	if w < 32 || h < 16 {
-		return lipgloss.NewStyle().MaxWidth(w).MaxHeight(h).Render("Resize terminal\nEsc to exit")
-	}
-	rule := m.paint(strings.Repeat("─", w), "240")
+func (m shellModel) banner() string {
 	logo := m.paint("  ▄█▄  \n ██ ██ \n██▄▄▄██\n██   ██", "99")
 	meta := m.paint("AUGUSTIN", "99") + " " + version.Current() + "\nThe Harness-First Coding Agent\n" +
 		SafeText(m.provider) + " · " + SafeText(m.model) + "\n" + SafeText(m.path)
 	header := lipgloss.JoinHorizontal(lipgloss.Top, logo, "   ", meta)
-	header = lipgloss.NewStyle().MaxWidth(w).Render(header)
-	welcome := "Workspace trusted.\n\nRead-only access · Editing and command execution disabled."
-	if len(m.history) > 0 {
-		welcome = ""
-		for i, msg := range m.history {
-			if msg.Role == model.RoleUser {
-				welcome += m.paint("❯ "+SafeText(msg.Content), "99") + "\n\n"
-				continue
-			}
-			if i/2 < len(m.turnDetails) {
-				welcome += m.turnDetails[i/2] + "\n\n"
-			}
-			answer := SafeText(msg.Content)
-			if i/2 < len(m.rendered) {
-				answer = m.rendered[i/2]
-			}
-			welcome += m.paint("Augustin", "99") + "\n" + answer + "\n\n"
-		}
-	}
+	return header + "\n\nWorkspace trusted.\nRead-only access · Editing and command execution disabled.\n"
+}
+
+func (m shellModel) userLine(prompt string) string {
+	return m.paint("❯ "+SafeText(prompt), "99")
+}
+
+// View draws only the live area; finished turns already live in the scrollback.
+func (m shellModel) View() string {
+	w := max(1, m.width)
+	rule := m.paint(strings.Repeat("─", w), "240")
+	var live string
 	if m.busy || m.status != "" {
-		welcome += "\n" + m.paint("❯ "+SafeText(m.submitted), "99") + "\n" + m.activitySummary()
-		welcome += "\n" + m.status
+		live = m.userLine(m.submitted) + "\n" + m.activitySummary() + "\n" + m.status
 		if m.partial != "" {
 			preview := m.partialRendered
 			if preview == "" {
 				preview = SafeText(m.partial)
 			}
-			welcome += "\n\n" + preview
+			// The inline renderer cannot draw above the screen top, so show the stream tail.
+			lines := strings.Split(preview, "\n")
+			keep := max(3, m.height-16)
+			if len(lines) > keep {
+				lines = lines[len(lines)-keep:]
+			}
+			live += "\n\n" + strings.Join(lines, "\n")
 		}
+		live = lipgloss.NewStyle().Width(w).Render(live) + "\n"
 	}
-	if m.commandNotice != "" {
-		welcome += "\n\n" + m.commandNotice
-	}
-	menu := m.commandMenu()
 	footer := strings.Join([]string{
 		m.paint("● READ ONLY", "78") + " · Workspace trusted",
 		rule,
 		m.composer.View(),
-		menu,
+		m.commandMenu(),
 		rule,
-		"Enter send · Alt+Enter newline · PgUp/PgDn scroll · Esc exit",
+		"Enter send · Alt+Enter newline · Esc exit",
 	}, "\n")
 	footer = strings.ReplaceAll(footer, "\n\n", "\n")
-	footer = lipgloss.NewStyle().MaxWidth(w).Render(footer)
-	body := lipgloss.NewStyle().Width(w).Render(welcome)
-	lines := strings.Split(body, "\n")
-	available := max(1, h-lipgloss.Height(footer)-lipgloss.Height(header)-2)
-	if len(lines) > available {
-		end := len(lines) - min(m.scroll, len(lines)-available)
-		lines = lines[end-available : end]
-	}
-	top := header + "\n\n" + strings.Join(lines, "\n")
-	space := max(0, h-lipgloss.Height(top)-lipgloss.Height(footer))
-	return lipgloss.NewStyle().MaxHeight(h).Render(top + strings.Repeat("\n", space+1) + footer)
+	return lipgloss.NewStyle().MaxWidth(w).Render(live + footer)
 }
 
 func RunShell(ctx context.Context, in io.Reader, out io.Writer, path, provider, model string, color bool, turn TurnFunc) error {
@@ -335,7 +311,7 @@ func RunShell(ctx context.Context, in io.Reader, out io.Writer, path, provider, 
 		emit:  func(e events.Event) { p.Send(liveEvent(e)) },
 		delta: func(text string) { p.Send(liveDelta(text)) },
 	}
-	p = tea.NewProgram(m, tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen(), tea.WithContext(ctx), tea.WithoutSignalHandler())
+	p = tea.NewProgram(m, tea.WithInput(in), tea.WithOutput(out), tea.WithContext(ctx), tea.WithoutSignalHandler())
 	_, err := p.Run()
 	return err
 }
