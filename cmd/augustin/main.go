@@ -21,6 +21,21 @@ import (
 func run(args []string, out, errOut io.Writer) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+	if len(args) == 0 && ui.Interactive(os.Stdin) && ui.Interactive(out) {
+		path, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintln(errOut, "cannot resolve current workspace")
+			return 1
+		}
+		accepted, err := ui.ConfirmWorkspace(ctx, os.Stdin, out, path, ui.ColorEnabled(out, os.LookupEnv))
+		if err != nil {
+			return 1
+		}
+		if accepted {
+			fmt.Fprintln(out, "Workspace trusted for this session. Interactive composer is not available yet.")
+		}
+		return 0
+	}
 	return runWith(ctx, args, out, errOut, os.LookupEnv, config.NewProvider)
 }
 
