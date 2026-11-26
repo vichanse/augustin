@@ -21,9 +21,15 @@ type TurnFunc func(context.Context, []model.Message, string, events.Sink) (strin
 
 type liveEvent events.Event
 
-type eventSink func(events.Event)
+type eventSink struct {
+	emit  func(events.Event)
+	delta func(string)
+}
 
-func (s eventSink) Emit(e events.Event) { s(e) }
+func (s eventSink) Emit(e events.Event)   { s.emit(e) }
+func (s eventSink) TextDelta(text string) { s.delta(text) }
+
+type liveDelta string
 
 type turnDone struct {
 	answer string
@@ -50,6 +56,7 @@ type shellModel struct {
 	scroll                int
 	turnDetails           []string
 	rendered              []string
+	partial               string
 }
 
 func newShellModel(path, provider, model string, color bool) shellModel {
@@ -73,16 +80,23 @@ func (m shellModel) Init() tea.Cmd { return textarea.Blink }
 
 func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch e := msg.(type) {
+	case liveDelta:
+		if m.busy {
+			m.partial += string(e)
+		}
+		return m, nil
 	case liveEvent:
 		if !m.busy {
 			return m, nil
 		}
 		switch e.Kind {
 		case events.ModelRequested:
+			m.partial = ""
 			m.activity = append(m.activity, fmt.Sprintf("Model request · iteration %d", e.Iteration))
 		case events.ModelCompleted:
 			m.tokens += e.InputTokens + e.OutputTokens
 		case events.ToolRequested:
+			m.partial = ""
 			m.toolCalls++
 			m.activity = append(m.activity, "Running "+SafeText(e.Tool))
 		case events.ToolCompleted:
@@ -99,6 +113,7 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case turnDone:
+		m.partial = ""
 		m.elapsed = time.Since(m.started)
 		m.busy = false
 		if e.err != nil {
@@ -154,6 +169,7 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activity = nil
 					m.toolCalls, m.tokens = 0, 0
 					m.status = "Working…"
+					m.partial = ""
 					return m, func() tea.Msg {
 						answer, err := m.turn(m.ctx, append([]model.Message(nil), m.history...), value, m.sink)
 						return turnDone{answer: answer, err: err}
@@ -208,6 +224,9 @@ func (m shellModel) View() string {
 	if m.busy || m.status != "" {
 		welcome += "\n" + m.paint("❯ "+SafeText(m.submitted), "99") + "\n" + m.activitySummary()
 		welcome += "\n" + m.status
+		if m.partial != "" {
+			welcome += "\n\n" + SafeText(m.partial)
+		}
 	}
 	footer := strings.Join([]string{
 		m.paint("● READ ONLY", "78") + " · Workspace trusted",
@@ -236,7 +255,10 @@ func RunShell(ctx context.Context, in io.Reader, out io.Writer, path, provider, 
 	m.ctx, m.turn = sessionCtx, turn
 	m.composer.Focus()
 	var p *tea.Program
-	m.sink = eventSink(func(e events.Event) { p.Send(liveEvent(e)) })
+	m.sink = eventSink{
+		emit:  func(e events.Event) { p.Send(liveEvent(e)) },
+		delta: func(text string) { p.Send(liveDelta(text)) },
+	}
 	p = tea.NewProgram(m, tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen(), tea.WithContext(ctx), tea.WithoutSignalHandler())
 	_, err := p.Run()
 	return err
