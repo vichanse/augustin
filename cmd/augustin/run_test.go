@@ -34,7 +34,7 @@ func TestReadOnlyRun(t *testing.T) {
 		calls++
 		return modeltest.New(
 			modeltest.Step{Response: model.Response{FinishReason: model.FinishToolCalls, Message: model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{{ID: "1", Name: "read_file", Arguments: json.RawMessage(`{"path":"main.go"}`)}}}}},
-			modeltest.Step{Response: model.Response{FinishReason: model.FinishStop, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}},
+			modeltest.Step{Response: model.Response{FinishReason: model.FinishStop, Message: model.Message{Role: model.RoleAssistant, Content: "done\x1b\x07"}}},
 		), nil
 	}
 	var out, stderr bytes.Buffer
@@ -42,8 +42,14 @@ func TestReadOnlyRun(t *testing.T) {
 	if code := runWith(context.Background(), args, &out, &stderr, lookup, factory); code != 0 || out.String() != "done\n" || !strings.Contains(stderr.String(), "tool.completed") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), stderr.String())
 	}
+	out.Reset()
+	stderr.Reset()
+	args = []string{"run", "--workspace", dir, "read fixture"}
+	if code := runWith(context.Background(), args, &out, &stderr, lookup, factory); code != 0 || out.String() != "done\n" || !strings.Contains(stderr.String(), "tool.completed") {
+		t.Fatalf("redirected output: code=%d stdout=%q stderr=%q", code, out.String(), stderr.String())
+	}
 	delete(env, "AUGUSTIN_ALLOW_REMOTE_DATA")
-	if code := runWith(context.Background(), args, &out, &stderr, lookup, factory); code != 2 || calls != 1 {
+	if code := runWith(context.Background(), args, &out, &stderr, lookup, factory); code != 2 || calls != 2 {
 		t.Fatalf("consent not enforced: code=%d factory calls=%d", code, calls)
 	}
 }
