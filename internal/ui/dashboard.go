@@ -50,7 +50,7 @@ type dashboardModel struct {
 	rows                    []string
 	status                  string
 	input, output, calls    int
-	failed, finished         bool
+	failed, finished        bool
 }
 
 func (m dashboardModel) Init() tea.Cmd { return nil }
@@ -74,10 +74,10 @@ func (m dashboardModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.calls++
 			m.status = toolLabel(e.Tool) + "…"
 		case events.ToolCompleted:
-			m.rows = append(m.rows, m.paint("✓", "78") + "  " + toolLabel(e.Tool) + "  (" + SafeText(e.Tool) + ")")
+			m.rows = append(m.rows, m.paint("✓", "78")+"  "+toolLabel(e.Tool)+"  ("+SafeText(e.Tool)+")")
 			m.status = ""
 		case events.ToolFailed:
-			m.rows = append(m.rows, m.paint("!", "214") + "  " + SafeText(e.Tool) + ": " + SafeText(string(e.Reason)))
+			m.rows = append(m.rows, m.paint("!", "214")+"  "+SafeText(e.Tool)+": "+SafeText(string(e.Reason)))
 			m.status = ""
 		case events.AgentCompleted, events.AgentFailed:
 			m.finished = true
