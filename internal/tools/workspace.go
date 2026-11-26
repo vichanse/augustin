@@ -44,14 +44,14 @@ func pathArgument(call model.ToolCall) (string, error) {
 		Path string
 	}
 	if err := json.Unmarshal(call.Arguments, &args); err != nil {
-		return "", err
+		return "", ErrInvalidArguments
 	}
 	if !filepath.IsLocal(args.Path) {
-		return "", errors.New("path must be local")
+		return "", ErrInvalidArguments
 	}
 	for _, part := range strings.Split(filepath.ToSlash(args.Path), "/") {
 		if part == ".." {
-			return "", errors.New("parent traversal denied")
+			return "", ErrDenied
 		}
 	}
 	return args.Path, nil

@@ -7,7 +7,9 @@ import (
 	"strings"
 )
 
-var errSensitivePath = errors.New("workspace path denied by policy")
+var ErrSensitivePath = errors.New("workspace path denied by policy")
+var errSensitivePath = ErrSensitivePath
+var ErrInvalidArguments = errors.New("invalid tool arguments")
 
 func sensitiveName(name string) bool {
 	name = strings.ToLower(name)

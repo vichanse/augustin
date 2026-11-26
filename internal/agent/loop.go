@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"time"
 
 	"github.com/vichanse/augustin/internal/events"
 	"github.com/vichanse/augustin/internal/model"
+	"github.com/vichanse/augustin/internal/tools"
 )
 
 var ErrIterationLimit = errors.New("agent iteration limit reached")
@@ -146,26 +148,59 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 			if err := ctx.Err(); err != nil {
 				return result, err
 			}
-			emit(events.Event{Kind: events.ToolRequested})
+			toolName := safeToolName(call.Name)
+			emit(events.Event{Kind: events.ToolRequested, Tool: toolName})
 			result.ToolCalls++
 			output, err := l.Executor.Execute(ctx, call)
 			if err != nil {
-				emit(events.Event{Kind: events.ToolFailed})
-				return result, fmt.Errorf("tool execution: %w", err)
+				reason, recoverable := classifyToolError(err)
+				emit(events.Event{Kind: events.ToolFailed, Tool: toolName, Reason: reason, Recoverable: recoverable})
+				if !recoverable {
+					return result, fmt.Errorf("tool execution: %w", err)
+				}
+				output = "Tool error: " + string(reason)
 			}
 			if err := ctx.Err(); err != nil {
 				return result, err
 			}
 			if len(output) > b.MaxOutputBytes-result.OutputBytes {
-				emit(events.Event{Kind: events.ToolFailed, Reason: events.BudgetExceeded})
+				emit(events.Event{Kind: events.ToolFailed, Tool: toolName, Reason: events.BudgetExceeded})
 				return result, fmt.Errorf("%w: tool output", ErrBudgetExceeded)
 			}
 			result.OutputBytes += len(output)
-			emit(events.Event{Kind: events.ToolCompleted})
+			if err == nil {
+				emit(events.Event{Kind: events.ToolCompleted, Tool: toolName})
+			}
 			result.Messages = append(result.Messages, model.Message{
 				Role: model.RoleTool, Content: output, ToolCallID: call.ID,
 			})
 		}
 	}
 	return result, ErrIterationLimit
+}
+
+func safeToolName(name string) string {
+	switch name {
+	case "read_file", "list_files":
+		return name
+	default:
+		return "other"
+	}
+}
+
+func classifyToolError(err error) (events.Reason, bool) {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return events.Canceled, false
+	case errors.Is(err, context.DeadlineExceeded):
+		return events.Deadline, false
+	case errors.Is(err, tools.ErrDenied), errors.Is(err, tools.ErrSensitivePath):
+		return "permission_denied", false
+	case errors.Is(err, tools.ErrInvalidArguments):
+		return "invalid_arguments", true
+	case errors.Is(err, fs.ErrNotExist):
+		return "file_not_found", true
+	default:
+		return events.ExecutionError, false
+	}
 }
