@@ -111,3 +111,24 @@ func TestRecoverDirectoryRequired(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestReservedFinalResponse(t *testing.T) {
+	calls := 0
+	p := providerFunc(func(_ context.Context, req model.Request) (model.Response, error) {
+		calls++
+		if calls == 1 {
+			return toolResponse("read"), nil
+		}
+		if len(req.Tools) != 0 || req.Messages[len(req.Messages)-1].Role != model.RoleSystem {
+			t.Fatal("final call must disable tools and request synthesis")
+		}
+		return model.Response{FinishReason: model.FinishStop, Message: model.Message{Role: model.RoleAssistant, Content: "partial findings"}}, nil
+	})
+	l := Loop{Provider: p, MaxIterations: 2, ReserveFinalResponse: true, Executor: executorFunc(func(context.Context, model.ToolCall) (string, error) {
+		return "evidence", nil
+	})}
+	r, err := l.Run(context.Background(), model.Request{Tools: []model.ToolDefinition{{Name: "read"}}})
+	if err != nil || r.Iterations != 2 || r.ToolCalls != 1 {
+		t.Fatalf("result=%+v error=%v", r, err)
+	}
+}
