@@ -57,6 +57,7 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, lookup c
 		fmt.Fprintln(errOut, "cannot initialize provider")
 		return 2
 	}
+	var dashboard *ui.Dashboard
 	var sink interface {
 		events.Sink
 		Err() error
@@ -64,7 +65,8 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, lookup c
 	if *jsonMode || !ui.Interactive(errOut) {
 		sink = events.NewJSONL(errOut)
 	} else {
-		sink = ui.NewSession(errOut, ui.ColorEnabled(errOut, lookup), c.Provider, c.Model, flags.Arg(0))
+		dashboard = ui.StartDashboard(ctx, errOut, ui.ColorEnabled(errOut, lookup), c.Provider, c.Model, flags.Arg(0))
+		sink = dashboard
 	}
 	loop := agent.Loop{
 		Provider:      p,
@@ -84,6 +86,9 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, lookup c
 			{Name: "list_files", Description: "List permitted workspace entries", InputSchema: schema},
 		},
 	})
+	if dashboard != nil {
+		dashboard.Finish()
+	}
 	if err != nil || sink.Err() != nil || len(result.Messages) == 0 {
 		fmt.Fprintln(errOut, "Augustin run failed; inspect execution events")
 		return 1
