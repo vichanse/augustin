@@ -52,9 +52,12 @@ func run(args []string, out, errOut io.Writer) int {
 			turn := func(ctx context.Context, history []model.Message, prompt string) (string, error) {
 				messages := append([]model.Message{systemMessage()}, history...)
 				messages = append(messages, model.Message{Role: model.RoleUser, Content: prompt})
-				result, err := loop.Run(ctx, codingRequest(messages))
+				diagnostic := &turnDiagnostic{}
+				current := loop
+				current.Events = diagnostic
+				result, err := current.Run(ctx, codingRequest(messages))
 				if err != nil {
-					return "", err
+					return "", fmt.Errorf("%s", diagnostic.summary)
 				}
 				return result.Messages[len(result.Messages)-1].Content, nil
 			}
@@ -148,7 +151,26 @@ func codingRequest(messages []model.Message) model.Request {
 		Messages: messages,
 		Tools: []model.ToolDefinition{
 			{Name: "read_file", Description: "Read a permitted file using a workspace-relative path. Absolute paths are forbidden.", InputSchema: readSchema},
-			{Name: "list_files", Description: "List permitted workspace entries. Omit path or use . for the workspace root. Only relative paths are allowed.", InputSchema: listSchema},
+			{Name: "list_files", Description: "List permitted workspace directory entries (not file contents). Omit path or use . for the workspace root. Only relative paths are allowed.", InputSchema: listSchema},
 		},
+	}
+}
+
+type turnDiagnostic struct {
+	summary string
+}
+
+func (d *turnDiagnostic) Emit(e events.Event) {
+	switch e.Kind {
+	case events.AgentStarted:
+		d.summary = "execution_error"
+	case events.ModelFailed:
+		d.summary = "model_failed"
+	case events.ToolFailed:
+		d.summary = string(e.Kind) + ": " + e.Tool + " (" + string(e.Reason) + ")"
+	case events.AgentFailed:
+		if e.Reason != events.ExecutionError {
+			d.summary = string(e.Reason)
+		}
 	}
 }
