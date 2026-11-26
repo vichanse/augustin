@@ -32,6 +32,12 @@ func TestWorkspace(t *testing.T) {
 	if got, err := call("list_files", "."); err != nil || got != `["hello.txt"]` {
 		t.Fatalf("list: %q %v", got, err)
 	}
+	if _, err := call("list_files", "hello.txt"); !errors.Is(err, ErrDirectoryRequired) {
+		t.Fatalf("list file: %v", err)
+	}
+	if _, err := call("read_file", "."); !errors.Is(err, ErrRegularFileRequired) {
+		t.Fatalf("read directory: %v", err)
+	}
 	for _, path := range []string{"../hello.txt", "sub/../hello.txt", filepath.Join(dir, "hello.txt")} {
 		if _, err := call("read_file", path); err == nil {
 			t.Fatalf("accepted path %q", path)
