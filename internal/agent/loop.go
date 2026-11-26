@@ -140,6 +140,13 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 			return result, ErrInvalidResponse
 		}
 		switch response.FinishReason {
+		case model.FinishLength:
+			if len(msg.ToolCalls) == 0 && msg.Content != "" {
+				msg.Content += "\n\n[Response truncated: model completion token limit reached.]"
+				result.Messages = append(result.Messages, msg)
+				return result, nil
+			}
+			return result, fmt.Errorf("%w: completion token limit reached", ErrInvalidResponse)
 		case model.FinishStop:
 			if len(msg.ToolCalls) != 0 {
 				return result, ErrInvalidResponse
@@ -154,7 +161,7 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 				return result, ErrInvalidResponse
 			}
 		default:
-			return result, fmt.Errorf("%w: finish reason %q", ErrInvalidResponse, response.FinishReason)
+			return result, fmt.Errorf("%w: unsupported finish reason", ErrInvalidResponse)
 		}
 		if len(msg.ToolCalls) > b.MaxToolCalls-result.ToolCalls {
 			return result, fmt.Errorf("%w: tool calls", ErrBudgetExceeded)
