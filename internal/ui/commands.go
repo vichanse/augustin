@@ -19,6 +19,7 @@ var slashCommands = []slashCommand{
 	{"/model", "Show active model"},
 	{"/tools", "List available tools"},
 	{"/trust", "Show workspace permissions"},
+	{"/permissions", "Show harness capability policy"},
 	{"/exit", "Exit Augustin"},
 	{"/sessions", "List saved sessions"},
 	{"/resume", "Resume a session by ID"},
@@ -90,6 +91,8 @@ func (m shellModel) runCommand(command string) (tea.Model, tea.Cmd) {
 		m.commandNotice = SafeText(m.provider) + " · " + SafeText(m.model)
 	case "/tools":
 		m.commandNotice = "Read-only tools: workspace_overview, list_files, read_file"
+	case "/permissions":
+		m.commandNotice = "Mode: READ ONLY\nRead: allowed for registered tools\nEdit: denied\nExecute: denied\nWorkspace trust does not grant additional capabilities."
 	case "/trust":
 		m.commandNotice = "Trusted workspace: " + SafeText(m.path) + "\nEditing and command execution disabled."
 	case "/sessions", "/resume", "/rename", "/delete":
