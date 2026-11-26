@@ -64,7 +64,7 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, lookup c
 	if *jsonMode || !ui.Interactive(errOut) {
 		sink = events.NewJSONL(errOut)
 	} else {
-		sink = ui.New(errOut)
+		sink = ui.NewStyled(errOut, ui.ColorEnabled(errOut, lookup))
 	}
 	loop := agent.Loop{
 		Provider:      p,
