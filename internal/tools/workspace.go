@@ -14,6 +14,11 @@ import (
 	"github.com/vichanse/augustin/internal/model"
 )
 
+var ErrDirectoryRequired = errors.New("directory required")
+var ErrRegularFileRequired = errors.New("regular file required")
+var ErrFileTooLarge = errors.New("file exceeds size limit")
+var ErrDirectoryEntryLimit = errors.New("directory exceeds entry limit")
+
 const maxFileBytes = 1 << 20
 
 type Workspace struct {
@@ -74,7 +79,7 @@ func (w *Workspace) readFile(ctx context.Context, call model.ToolCall) (string, 
 		return "", err
 	}
 	if !info.Mode().IsRegular() {
-		return "", errors.New("regular files only")
+		return "", ErrRegularFileRequired
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -89,14 +94,14 @@ func (w *Workspace) readFile(ctx context.Context, call model.ToolCall) (string, 
 		return "", err
 	}
 	if !info.Mode().IsRegular() {
-		return "", errors.New("regular files only")
+		return "", ErrRegularFileRequired
 	}
 	data, err := io.ReadAll(io.LimitReader(f, maxFileBytes+1))
 	if err != nil {
 		return "", err
 	}
 	if len(data) > maxFileBytes {
-		return "", errors.New("file exceeds size limit")
+		return "", ErrFileTooLarge
 	}
 	return string(data), ctx.Err()
 }
@@ -111,7 +116,7 @@ func (w *Workspace) listFiles(ctx context.Context, call model.ToolCall) (string,
 		return "", err
 	}
 	if !info.IsDir() {
-		return "", errors.New("directory required")
+		return "", ErrDirectoryRequired
 	}
 	f, err := w.root.Open(path)
 	if err != nil {
@@ -123,7 +128,7 @@ func (w *Workspace) listFiles(ctx context.Context, call model.ToolCall) (string,
 		return "", err
 	}
 	if len(entries) > 1000 {
-		return "", errors.New("directory exceeds entry limit")
+		return "", ErrDirectoryEntryLimit
 	}
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
