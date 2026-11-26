@@ -7,7 +7,7 @@ test:
 	go test ./...
 
 lint:
-	@test -z "$$(gofmt -l .)"
+	@files=$(gofmt -l .) || exit 1; if [ -n "$files" ]; then printf 'Unformatted Go files:\n%s\n' "$files"; exit 1; fi
 	go vet ./...
 
 check: lint test build
