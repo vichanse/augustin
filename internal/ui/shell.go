@@ -71,7 +71,6 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.busy {
 			return m, nil
 		}
-		e := events.Event(e)
 		switch e.Kind {
 		case events.ModelRequested:
 			m.activity = append(m.activity, fmt.Sprintf("Model request · iteration %d", e.Iteration))
