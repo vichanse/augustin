@@ -65,6 +65,7 @@ func (m shellModel) commandMenu() string {
 
 func (m shellModel) runCommand(command string) (tea.Model, tea.Cmd) {
 	m.composer.Reset()
+	m.resizeComposer()
 	m.commandIndex = 0
 	m.scroll = 0
 	name, _, _ := strings.Cut(command, " ")
