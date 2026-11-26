@@ -60,6 +60,8 @@ type shellModel struct {
 	partial               string
 	partialRendered       string
 	lastRender            time.Time
+	commandIndex          int
+	commandNotice         string
 }
 
 func newShellModel(path, provider, model string, color bool) shellModel {
@@ -160,6 +162,26 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tea.KeyMsg:
+		if !m.busy {
+			matches := matchingCommands(m.composer.Value())
+			if len(matches) > 0 {
+				m.commandIndex = min(m.commandIndex, len(matches)-1)
+				switch e.String() {
+				case "up":
+					m.commandIndex = (m.commandIndex + len(matches) - 1) % len(matches)
+					return m, nil
+				case "down":
+					m.commandIndex = (m.commandIndex + 1) % len(matches)
+					return m, nil
+				case "tab":
+					m.composer.SetValue(matches[m.commandIndex].name)
+					m.commandIndex = 0
+					return m, nil
+				case "enter":
+					return m.runCommand(matches[m.commandIndex].name)
+				}
+			}
+		}
 		switch e.String() {
 		case "esc", "ctrl+c":
 			return m, tea.Quit
@@ -176,6 +198,10 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if value := strings.TrimSpace(m.composer.Value()); value != "" {
+				if strings.HasPrefix(value, "/") && !strings.Contains(value, "\n") {
+					return m.runCommand(value)
+				}
+				m.commandNotice = ""
 				m.scroll = 0
 				m.submitted = value
 				m.composer.Reset()
@@ -198,7 +224,11 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	var cmd tea.Cmd
+	before := m.composer.Value()
 	m.composer, cmd = m.composer.Update(msg)
+	if before != m.composer.Value() {
+		m.commandIndex = 0
+	}
 	return m, cmd
 }
 
@@ -250,13 +280,19 @@ func (m shellModel) View() string {
 			welcome += "\n\n" + preview
 		}
 	}
+	if m.commandNotice != "" {
+		welcome += "\n\n" + m.commandNotice
+	}
+	menu := m.commandMenu()
 	footer := strings.Join([]string{
 		m.paint("● READ ONLY", "78") + " · Workspace trusted",
 		rule,
 		m.composer.View(),
+		menu,
 		rule,
 		"Enter send · Alt+Enter newline · PgUp/PgDn scroll · Esc exit",
 	}, "\n")
+	footer = strings.ReplaceAll(footer, "\n\n", "\n")
 	footer = lipgloss.NewStyle().MaxWidth(w).Render(footer)
 	body := lipgloss.NewStyle().Width(w).Render(welcome)
 	lines := strings.Split(body, "\n")
