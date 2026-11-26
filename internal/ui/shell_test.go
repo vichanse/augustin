@@ -16,7 +16,7 @@ import (
 func TestShellLayout(t *testing.T) {
 	m := newShellModel("/workspace", "openai", "test", false)
 	view := m.View()
-	for _, want := range []string{"AUGUSTIN", "/workspace", "openai", "READ ONLY", "Ctrl+S submit"} {
+	for _, want := range []string{"AUGUSTIN", "/workspace", "openai", "READ ONLY", "Enter send"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("missing %q", want)
 		}
@@ -38,7 +38,7 @@ func TestComposerSubmission(t *testing.T) {
 	m := newShellModel("/workspace", "openai", "test", false)
 	m.composer.Focus()
 	m.composer.SetValue("first line\nsecond line")
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	got := next.(shellModel)
 	if got.submitted != "first line\nsecond line" || got.composer.Value() != "" {
 		t.Fatal("multiline prompt was not captured and reset")
@@ -55,7 +55,7 @@ func TestConversationTurn(t *testing.T) {
 		return "world", nil
 	}
 	m.composer.SetValue("hello")
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil || !next.(shellModel).busy {
 		t.Fatal("turn did not start")
 	}
@@ -75,5 +75,18 @@ func TestLiveHarnessEvents(t *testing.T) {
 	got := next.(shellModel)
 	if got.toolCalls != 1 || got.tokens != 15 || !strings.Contains(strings.Join(got.activity, "\n"), "Recoverable: list_files") {
 		t.Fatalf("unexpected telemetry: %+v", got.activity)
+	}
+}
+
+func TestConversationScroll(t *testing.T) {
+	m := newShellModel("/workspace", "openai", "test", false)
+	m.history = []model.Message{{Role: model.RoleUser, Content: "first prompt"}, {Role: model.RoleAssistant, Content: strings.Repeat("answer line\n", 50)}}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	if next.(shellModel).scroll == 0 {
+		t.Fatal("page up did not scroll")
+	}
+	next, _ = next.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	if next.(shellModel).scroll != 0 {
+		t.Fatal("page down did not restore bottom")
 	}
 }

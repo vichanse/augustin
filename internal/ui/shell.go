@@ -13,6 +13,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -46,12 +47,17 @@ type shellModel struct {
 	elapsed               time.Duration
 	toolCalls             int
 	tokens                int
+	scroll                int
+	turnDetails           []string
+	rendered              []string
 }
 
 func newShellModel(path, provider, model string, color bool) shellModel {
 	composer := textarea.New()
 	composer.Placeholder = "Ask Augustin about this workspace"
 	composer.Prompt = "❯ "
+	composer.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	composer.BlurredStyle.CursorLine = lipgloss.NewStyle()
 	composer.ShowLineNumbers = false
 	composer.CharLimit = 8192
 	composer.SetWidth(80)
@@ -104,20 +110,42 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.history = append([]model.Message(nil), m.history[len(m.history)-20:]...)
 			}
 			m.status = ""
+			m.turnDetails = append(m.turnDetails, m.activitySummary())
+			m.rendered = append(m.rendered, m.markdown(e.answer))
+			if len(m.turnDetails) > 10 {
+				m.turnDetails = m.turnDetails[len(m.turnDetails)-10:]
+				m.rendered = m.rendered[len(m.rendered)-10:]
+			}
+			m.scroll = 0
 		}
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = e.Width, e.Height
 		m.composer.SetWidth(max(1, e.Width-2))
+		m.rendered = nil
+		for _, msg := range m.history {
+			if msg.Role == model.RoleAssistant {
+				m.rendered = append(m.rendered, m.markdown(msg.Content))
+			}
+		}
 	case tea.KeyMsg:
 		switch e.String() {
 		case "esc", "ctrl+c":
 			return m, tea.Quit
-		case "ctrl+s":
+		case "pgup":
+			m.scroll += max(1, m.height/2)
+			return m, nil
+		case "pgdown":
+			m.scroll = max(0, m.scroll-max(1, m.height/2))
+			return m, nil
+		case "alt+enter":
+			msg = tea.KeyMsg{Type: tea.KeyEnter}
+		case "enter", "ctrl+s":
 			if m.busy {
 				return m, nil
 			}
 			if value := strings.TrimSpace(m.composer.Value()); value != "" {
+				m.scroll = 0
 				m.submitted = value
 				m.composer.Reset()
 				if m.turn != nil {
@@ -162,28 +190,23 @@ func (m shellModel) View() string {
 	welcome := "Workspace trusted for this session.\n\nRead-only access · Editing and command execution disabled."
 	if len(m.history) > 0 {
 		welcome = ""
-		for _, msg := range m.history {
-			label := "You"
-			if msg.Role == model.RoleAssistant {
-				label = "Augustin"
+		for i, msg := range m.history {
+			if msg.Role == model.RoleUser {
+				welcome += m.paint("❯ "+SafeText(msg.Content), "99") + "\n\n"
+				continue
 			}
-			welcome += label + ":\n" + SafeText(msg.Content) + "\n\n"
+			if i/2 < len(m.turnDetails) {
+				welcome += m.turnDetails[i/2] + "\n\n"
+			}
+			answer := SafeText(msg.Content)
+			if i/2 < len(m.rendered) {
+				answer = m.rendered[i/2]
+			}
+			welcome += m.paint("Augustin", "99") + "\n" + answer + "\n\n"
 		}
 	}
-	if m.busy {
-		welcome += "\nYou:\n" + SafeText(m.submitted)
-	}
-	if len(m.activity) > 0 {
-		welcome += "\n" + strings.Join(m.activity, "\n")
-	}
-	if !m.started.IsZero() {
-		elapsed := m.elapsed
-		if m.busy {
-			elapsed = time.Since(m.started)
-		}
-		welcome += fmt.Sprintf("\n%d tools · %d tokens · %s", m.toolCalls, m.tokens, elapsed.Round(time.Millisecond))
-	}
-	if m.status != "" {
+	if m.busy || m.status != "" {
+		welcome += "\n" + m.paint("❯ "+SafeText(m.submitted), "99") + "\n" + m.activitySummary()
 		welcome += "\n" + m.status
 	}
 	footer := strings.Join([]string{
@@ -191,14 +214,15 @@ func (m shellModel) View() string {
 		rule,
 		m.composer.View(),
 		rule,
-		"Ctrl+S submit · Enter newline · Esc exit",
+		"Enter send · Alt+Enter newline · PgUp/PgDn scroll · Esc exit",
 	}, "\n")
 	footer = lipgloss.NewStyle().MaxWidth(w).Render(footer)
 	body := lipgloss.NewStyle().Width(w).Render(welcome)
 	lines := strings.Split(body, "\n")
 	available := max(1, h-lipgloss.Height(footer)-lipgloss.Height(header)-2)
 	if len(lines) > available {
-		lines = lines[len(lines)-available:]
+		end := len(lines) - min(m.scroll, len(lines)-available)
+		lines = lines[end-available : end]
 	}
 	top := header + "\n\n" + strings.Join(lines, "\n")
 	space := max(0, h-lipgloss.Height(top)-lipgloss.Height(footer))
@@ -216,4 +240,28 @@ func RunShell(ctx context.Context, in io.Reader, out io.Writer, path, provider, 
 	p = tea.NewProgram(m, tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen(), tea.WithContext(ctx), tea.WithoutSignalHandler())
 	_, err := p.Run()
 	return err
+}
+
+func (m shellModel) activitySummary() string {
+	elapsed := m.elapsed
+	if m.busy {
+		elapsed = time.Since(m.started)
+	}
+	return strings.Join(m.activity, "\n") + fmt.Sprintf("\n%d tools · %d tokens · %s", m.toolCalls, m.tokens, elapsed.Round(time.Millisecond))
+}
+
+func (m shellModel) markdown(answer string) string {
+	safe := SafeText(answer)
+	if !m.color {
+		return safe
+	}
+	renderer, err := glamour.NewTermRenderer(glamour.WithStandardStyle("dark"), glamour.WithWordWrap(max(20, m.width-4)))
+	if err != nil {
+		return safe
+	}
+	rendered, err := renderer.Render(safe)
+	if err != nil {
+		return safe
+	}
+	return strings.TrimSpace(rendered)
 }
