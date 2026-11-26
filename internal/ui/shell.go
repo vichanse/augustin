@@ -5,10 +5,19 @@ import (
 	"io"
 	"strings"
 
+	"github.com/vichanse/augustin/internal/model"
+
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+type TurnFunc func(context.Context, []model.Message, string) (string, error)
+
+type turnDone struct {
+	answer string
+	err    error
+}
 
 type shellModel struct {
 	path, provider, model string
@@ -16,6 +25,11 @@ type shellModel struct {
 	color                 bool
 	composer              textarea.Model
 	submitted             string
+	ctx                   context.Context
+	turn                  TurnFunc
+	history               []model.Message
+	busy                  bool
+	status                string
 }
 
 func newShellModel(path, provider, model string, color bool) shellModel {
@@ -37,6 +51,19 @@ func (m shellModel) Init() tea.Cmd { return textarea.Blink }
 
 func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch e := msg.(type) {
+	case turnDone:
+		m.busy = false
+		if e.err != nil {
+			m.status = "Request failed; retry your prompt."
+			m.composer.SetValue(m.submitted)
+		} else {
+			m.history = append(m.history, model.Message{Role: model.RoleUser, Content: m.submitted}, model.Message{Role: model.RoleAssistant, Content: e.answer})
+			if len(m.history) > 20 {
+				m.history = append([]model.Message(nil), m.history[len(m.history)-20:]...)
+			}
+			m.status = ""
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = e.Width, e.Height
 		m.composer.SetWidth(max(1, e.Width-2))
@@ -45,9 +72,20 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "esc", "ctrl+c":
 			return m, tea.Quit
 		case "ctrl+s":
+			if m.busy {
+				return m, nil
+			}
 			if value := strings.TrimSpace(m.composer.Value()); value != "" {
 				m.submitted = value
 				m.composer.Reset()
+				if m.turn != nil {
+					m.busy = true
+					m.status = "Working…"
+					return m, func() tea.Msg {
+						answer, err := m.turn(m.ctx, append([]model.Message(nil), m.history...), value)
+						return turnDone{answer: answer, err: err}
+					}
+				}
 			}
 			return m, nil
 		}
@@ -77,25 +115,44 @@ func (m shellModel) View() string {
 	header := lipgloss.JoinHorizontal(lipgloss.Top, logo, "   ", meta)
 	header = lipgloss.NewStyle().MaxWidth(w).Render(header)
 	welcome := "Workspace trusted for this session.\n\nRead-only access · Editing and command execution disabled."
-	if m.submitted != "" {
-		welcome = "Prompt captured locally (not sent to a model):\n" + SafeText(m.submitted)
+	if len(m.history) > 0 {
+		welcome = ""
+		for _, msg := range m.history {
+			label := "You"
+			if msg.Role == model.RoleAssistant {
+				label = "Augustin"
+			}
+			welcome += label + ":\n" + SafeText(msg.Content) + "\n\n"
+		}
+	}
+	if m.busy {
+		welcome += "\nYou:\n" + SafeText(m.submitted)
+	}
+	if m.status != "" {
+		welcome += "\n" + m.status
 	}
 	footer := strings.Join([]string{
 		m.paint("● READ ONLY", "78") + " · Workspace trusted",
 		rule,
 		m.composer.View(),
 		rule,
-		"Ctrl+S submit preview · Enter newline · Esc exit",
+		"Ctrl+S submit · Enter newline · Esc exit",
 	}, "\n")
 	footer = lipgloss.NewStyle().MaxWidth(w).Render(footer)
-	top := header + "\n\n" + lipgloss.NewStyle().MaxWidth(w).Render(welcome)
-	top = lipgloss.NewStyle().MaxHeight(max(1, h-lipgloss.Height(footer))).Render(top)
+	body := lipgloss.NewStyle().Width(w).Render(welcome)
+	lines := strings.Split(body, "\n")
+	available := max(1, h-lipgloss.Height(footer)-lipgloss.Height(header)-2)
+	if len(lines) > available {
+		lines = lines[len(lines)-available:]
+	}
+	top := header + "\n\n" + strings.Join(lines, "\n")
 	space := max(0, h-lipgloss.Height(top)-lipgloss.Height(footer))
 	return lipgloss.NewStyle().MaxHeight(h).Render(top + strings.Repeat("\n", space+1) + footer)
 }
 
-func RunShell(ctx context.Context, in io.Reader, out io.Writer, path, provider, model string, color bool) error {
+func RunShell(ctx context.Context, in io.Reader, out io.Writer, path, provider, model string, color bool, turn TurnFunc) error {
 	m := newShellModel(path, provider, model, color)
+	m.ctx, m.turn = ctx, turn
 	m.composer.Focus()
 	p := tea.NewProgram(m, tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen(), tea.WithContext(ctx), tea.WithoutSignalHandler())
 	_, err := p.Run()
