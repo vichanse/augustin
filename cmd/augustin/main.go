@@ -32,7 +32,15 @@ func run(args []string, out, errOut io.Writer) int {
 			return 1
 		}
 		if accepted {
-			fmt.Fprintln(out, "Workspace trusted for this session. Interactive composer is not available yet.")
+			c, err := config.Load(os.LookupEnv)
+			if err != nil {
+				fmt.Fprintln(errOut, err)
+				return 2
+			}
+			if err := ui.RunShell(ctx, os.Stdin, out, path, c.Provider, c.Model, ui.ColorEnabled(out, os.LookupEnv)); err != nil {
+				fmt.Fprintln(errOut, "interactive session failed")
+				return 1
+			}
 		}
 		return 0
 	}
