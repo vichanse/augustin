@@ -4,8 +4,10 @@ import (
 	"context"
 	"strings"
 
-	"github.com/vichanse/augustin/internal/model"
 	"testing"
+
+	"github.com/vichanse/augustin/internal/events"
+	"github.com/vichanse/augustin/internal/model"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -46,7 +48,7 @@ func TestComposerSubmission(t *testing.T) {
 func TestConversationTurn(t *testing.T) {
 	m := newShellModel("/workspace", "openai", "test", false)
 	m.ctx = context.Background()
-	m.turn = func(_ context.Context, history []model.Message, prompt string) (string, error) {
+	m.turn = func(_ context.Context, history []model.Message, prompt string, _ events.Sink) (string, error) {
 		if len(history) != 0 || prompt != "hello" {
 			t.Fatal("unexpected turn input")
 		}
@@ -61,5 +63,17 @@ func TestConversationTurn(t *testing.T) {
 	got := next.(shellModel)
 	if got.busy || len(got.history) != 2 || got.history[1].Content != "world" {
 		t.Fatal("turn was not retained")
+	}
+}
+
+func TestLiveHarnessEvents(t *testing.T) {
+	m := newShellModel("/workspace", "openai", "test", false)
+	m.busy = true
+	next, _ := m.Update(liveEvent(events.Event{Kind: events.ToolRequested, Tool: "list_files"}))
+	next, _ = next.Update(liveEvent(events.Event{Kind: events.ModelCompleted, InputTokens: 10, OutputTokens: 5}))
+	next, _ = next.Update(liveEvent(events.Event{Kind: events.ToolFailed, Tool: "list_files", Reason: "directory_required", Recoverable: true}))
+	got := next.(shellModel)
+	if got.toolCalls != 1 || got.tokens != 15 || !strings.Contains(strings.Join(got.activity, "\n"), "Recoverable: list_files") {
+		t.Fatalf("unexpected telemetry: %+v", got.activity)
 	}
 }
