@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -57,6 +58,8 @@ type shellModel struct {
 	turnDetails           []string
 	rendered              []string
 	partial               string
+	partialRendered       string
+	lastRender            time.Time
 }
 
 func newShellModel(path, provider, model string, color bool) shellModel {
@@ -76,13 +79,19 @@ func newShellModel(path, provider, model string, color bool) shellModel {
 	return shellModel{path: path, provider: provider, model: model, color: color, width: 80, height: 24, composer: composer}
 }
 
-func (m shellModel) Init() tea.Cmd { return textarea.Blink }
+func (m shellModel) Init() tea.Cmd {
+	return tea.Batch(textarea.Blink, tea.SetWindowTitle("▲ Augustin — "+strings.ReplaceAll(SafeText(filepath.Base(m.path)), "\n", " ")))
+}
 
 func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch e := msg.(type) {
 	case liveDelta:
 		if m.busy {
 			m.partial += string(e)
+			if time.Since(m.lastRender) >= 150*time.Millisecond {
+				m.partialRendered = m.markdown(m.partial)
+				m.lastRender = time.Now()
+			}
 		}
 		return m, nil
 	case liveEvent:
@@ -92,11 +101,13 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch e.Kind {
 		case events.ModelRequested:
 			m.partial = ""
+			m.partialRendered = ""
 			m.activity = append(m.activity, fmt.Sprintf("Model request · iteration %d", e.Iteration))
 		case events.ModelCompleted:
 			m.tokens += e.InputTokens + e.OutputTokens
 		case events.ToolRequested:
 			m.partial = ""
+			m.partialRendered = ""
 			m.toolCalls++
 			m.activity = append(m.activity, "Running "+SafeText(e.Tool))
 		case events.ToolCompleted:
@@ -113,7 +124,12 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case turnDone:
-		m.partial = ""
+		if e.err == nil {
+			m.partial = ""
+			m.partialRendered = ""
+		} else {
+			m.partialRendered = m.markdown(m.partial)
+		}
 		m.elapsed = time.Since(m.started)
 		m.busy = false
 		if e.err != nil {
@@ -170,6 +186,8 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.toolCalls, m.tokens = 0, 0
 					m.status = "Working…"
 					m.partial = ""
+					m.partialRendered = ""
+					m.lastRender = time.Time{}
 					return m, func() tea.Msg {
 						answer, err := m.turn(m.ctx, append([]model.Message(nil), m.history...), value, m.sink)
 						return turnDone{answer: answer, err: err}
@@ -203,7 +221,7 @@ func (m shellModel) View() string {
 		SafeText(m.provider) + " · " + SafeText(m.model) + "\n" + SafeText(m.path)
 	header := lipgloss.JoinHorizontal(lipgloss.Top, logo, "   ", meta)
 	header = lipgloss.NewStyle().MaxWidth(w).Render(header)
-	welcome := "Workspace trusted for this session.\n\nRead-only access · Editing and command execution disabled."
+	welcome := "Workspace trusted.\n\nRead-only access · Editing and command execution disabled."
 	if len(m.history) > 0 {
 		welcome = ""
 		for i, msg := range m.history {
@@ -225,7 +243,11 @@ func (m shellModel) View() string {
 		welcome += "\n" + m.paint("❯ "+SafeText(m.submitted), "99") + "\n" + m.activitySummary()
 		welcome += "\n" + m.status
 		if m.partial != "" {
-			welcome += "\n\n" + SafeText(m.partial)
+			preview := m.partialRendered
+			if preview == "" {
+				preview = SafeText(m.partial)
+			}
+			welcome += "\n\n" + preview
 		}
 	}
 	footer := strings.Join([]string{
