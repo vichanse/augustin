@@ -198,6 +198,16 @@ func classifyToolError(err error) (events.Reason, bool) {
 		return "permission_denied", false
 	case errors.Is(err, tools.ErrInvalidArguments):
 		return "invalid_arguments", true
+	case errors.Is(err, tools.ErrDirectoryRequired):
+		return "directory_required", true
+	case errors.Is(err, tools.ErrRegularFileRequired):
+		return "regular_file_required", true
+	case errors.Is(err, tools.ErrFileTooLarge):
+		return "file_too_large", true
+	case errors.Is(err, tools.ErrDirectoryEntryLimit):
+		return "directory_entry_limit", true
+	case errors.Is(err, fs.ErrPermission):
+		return "permission_denied", false
 	case errors.Is(err, fs.ErrNotExist):
 		return "file_not_found", true
 	default:
