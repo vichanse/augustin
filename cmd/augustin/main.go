@@ -155,7 +155,7 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, lookup c
 	if *jsonMode || !ui.Interactive(errOut) {
 		sink = events.NewJSONL(errOut)
 	} else {
-		dashboard = ui.StartDashboard(ctx, errOut, ui.ColorEnabled(errOut, lookup), c.Provider, c.Model, flags.Arg(0))
+		dashboard = ui.StartDashboard(ctx, errOut, ui.ColorEnabled(errOut, lookup), *workspace, c.Provider, c.Model, flags.Arg(0))
 		sink = dashboard
 	}
 	loop := agent.Loop{

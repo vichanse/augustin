@@ -331,6 +331,21 @@ func (m shellModel) userLine(prompt string) string {
 func (m shellModel) View() string {
 	w := max(1, m.width)
 	rule := m.paint(strings.Repeat("─", w), "240")
+	footer := strings.Join([]string{
+		m.paint("● READ ONLY", "78") + " · Workspace trusted",
+		rule,
+		m.composer.View(),
+		m.commandMenu(),
+		rule,
+		m.keyHint(),
+	}, "\n")
+	footer = strings.ReplaceAll(footer, "\n\n", "\n")
+	return lipgloss.NewStyle().MaxWidth(w).Render(m.liveArea() + footer)
+}
+
+// liveArea is the running turn: prompt, tool activity, spinner status and stream tail.
+func (m shellModel) liveArea() string {
+	w := max(1, m.width)
 	var live string
 	if m.busy || m.status != "" {
 		status := m.status
@@ -353,16 +368,7 @@ func (m shellModel) View() string {
 		}
 		live = lipgloss.NewStyle().Width(w).Render(live) + "\n"
 	}
-	footer := strings.Join([]string{
-		m.paint("● READ ONLY", "78") + " · Workspace trusted",
-		rule,
-		m.composer.View(),
-		m.commandMenu(),
-		rule,
-		m.keyHint(),
-	}, "\n")
-	footer = strings.ReplaceAll(footer, "\n\n", "\n")
-	return lipgloss.NewStyle().MaxWidth(w).Render(live + footer)
+	return live
 }
 
 func RunShell(ctx context.Context, in io.Reader, out io.Writer, path, provider, model string, color bool, turn TurnFunc) error {
