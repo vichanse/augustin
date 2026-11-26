@@ -83,3 +83,22 @@ func TestListFilesRootArguments(t *testing.T) {
 		t.Fatalf("read without path: %v", err)
 	}
 }
+
+func TestDetailedListing(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "cmd"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("docs"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	w, err := OpenWorkspace(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	got, err := w.listFiles(context.Background(), model.ToolCall{Name: "list_files", Arguments: json.RawMessage(`{"detailed":true}`)})
+	if err != nil || got != `[{"name":"README.md","type":"file"},{"name":"cmd","type":"directory"}]` {
+		t.Fatalf("listing=%q error=%v", got, err)
+	}
+}

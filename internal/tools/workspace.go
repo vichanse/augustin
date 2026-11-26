@@ -51,6 +51,13 @@ func pathArgument(call model.ToolCall) (string, error) {
 	}
 	var path string
 	for key, value := range args {
+		if key == "detailed" && call.Name == "list_files" {
+			var detailed bool
+			if string(value) == "null" || json.Unmarshal(value, &detailed) != nil {
+				return "", ErrInvalidArguments
+			}
+			continue
+		}
 		if key != "path" || string(value) == "null" || json.Unmarshal(value, &path) != nil {
 			return "", ErrInvalidArguments
 		}
@@ -130,6 +137,17 @@ func (w *Workspace) listFiles(ctx context.Context, call model.ToolCall) (string,
 	if len(entries) > 1000 {
 		return "", ErrDirectoryEntryLimit
 	}
+	var options struct {
+		Detailed bool
+	}
+	if err := json.Unmarshal(call.Arguments, &options); err != nil {
+		return "", ErrInvalidArguments
+	}
+	type listingEntry struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	details := make([]listingEntry, 0, len(entries))
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
@@ -137,7 +155,19 @@ func (w *Workspace) listFiles(ctx context.Context, call model.ToolCall) (string,
 		}
 		if entry.Type()&fs.ModeSymlink == 0 && !sensitiveName(entry.Name()) {
 			names = append(names, entry.Name())
+			kind := "other"
+			if entry.IsDir() {
+				kind = "directory"
+			} else if entry.Type().IsRegular() {
+				kind = "file"
+			}
+			details = append(details, listingEntry{Name: entry.Name(), Type: kind})
 		}
+	}
+	if options.Detailed {
+		sort.Slice(details, func(i, j int) bool { return details[i].Name < details[j].Name })
+		data, err := json.Marshal(details)
+		return string(data), err
 	}
 	sort.Strings(names)
 	data, err := json.Marshal(names)

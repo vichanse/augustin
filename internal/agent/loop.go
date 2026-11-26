@@ -24,11 +24,12 @@ type Executor interface {
 }
 
 type Loop struct {
-	Provider      model.Provider
-	Executor      Executor
-	MaxIterations int
-	Events        events.Sink
-	Budget        Budget
+	Provider             model.Provider
+	Executor             Executor
+	MaxIterations        int
+	Events               events.Sink
+	Budget               Budget
+	ReserveFinalResponse bool
 }
 
 // Budget bounds tool execution and cooperative run duration.
@@ -104,6 +105,15 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 			return result, err
 		}
 		req.Messages = append([]model.Message(nil), result.Messages...)
+		final := l.ReserveFinalResponse && result.Iterations == l.MaxIterations-1
+		if l.ReserveFinalResponse {
+			instruction := fmt.Sprintf("Execution budget: %d model calls remaining including this call. %d tool calls remaining. Avoid repeated exploration; answer as soon as evidence is sufficient.", l.MaxIterations-result.Iterations, b.MaxToolCalls-result.ToolCalls)
+			if final {
+				req.Tools = nil
+				instruction = "Final response required now. No tools are available. Answer using the evidence already collected; explicitly state any gaps or uncertainty. Do not claim unverified findings."
+			}
+			req.Messages = append(req.Messages, model.Message{Role: model.RoleSystem, Content: instruction})
+		}
 		result.Iterations++
 		emit(events.Event{Kind: events.ModelRequested})
 		response, err := l.Provider.Complete(ctx, req)
@@ -127,6 +137,9 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 			result.Messages = append(result.Messages, msg)
 			return result, nil
 		case model.FinishToolCalls:
+			if final {
+				return result, ErrIterationLimit
+			}
 			if len(msg.ToolCalls) == 0 || l.Executor == nil {
 				return result, ErrInvalidResponse
 			}
