@@ -69,3 +69,16 @@ func TestHTTPErrorRedacted(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestClientDoesNotCapStreamDuration(t *testing.T) {
+	p, err := New("test-key", "test-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.client.Timeout != 0 {
+		t.Fatal("client timeout would cut long streamed responses")
+	}
+	if tr, ok := p.client.Transport.(*http.Transport); !ok || tr.ResponseHeaderTimeout <= 0 {
+		t.Fatal("response header timeout required")
+	}
+}
