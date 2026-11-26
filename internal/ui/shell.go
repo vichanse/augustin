@@ -68,6 +68,9 @@ type shellModel struct {
 	toolLabel             string
 	spinner               spinner.Model
 	mdStyle               string
+	prompts               []string // submitted this run, oldest first
+	promptIndex           int      // == len(prompts) when not browsing
+	draft                 string   // unsent text saved while browsing
 	started               time.Time
 	elapsed               time.Duration
 	toolCalls             int
@@ -219,6 +222,34 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = e.Width, e.Height
 		m.composer.SetWidth(max(1, e.Width-2))
 	case tea.KeyMsg:
+		switch e.String() {
+		case "up":
+			// History wins over the slash menu once browsing, so a recalled command cannot trap ↑.
+			if m.composer.Line() == 0 && (m.browsing() || len(matchingCommands(m.composer.Value())) == 0) {
+				if m.promptIndex == 0 {
+					if m.browsing() {
+						return m, nil // already at the oldest prompt
+					}
+					break
+				}
+				if !m.browsing() {
+					m.draft = m.composer.Value()
+				}
+				m.promptIndex--
+				m.setComposer(m.prompts[m.promptIndex])
+				return m, nil
+			}
+		case "down":
+			if m.browsing() && m.composer.Line() == strings.Count(m.composer.Value(), "\n") {
+				m.promptIndex++
+				if m.browsing() {
+					m.setComposer(m.prompts[m.promptIndex])
+				} else {
+					m.setComposer(m.draft)
+				}
+				return m, nil
+			}
+		}
 		if !m.busy {
 			matches := matchingCommands(m.composer.Value())
 			if len(matches) > 0 {
@@ -236,6 +267,7 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.commandIndex = 0
 					return m, nil
 				case "enter":
+					m.remember(matches[m.commandIndex].name)
 					return m.runCommand(matches[m.commandIndex].name)
 				}
 			}
@@ -268,6 +300,7 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if value := strings.TrimSpace(m.composer.Value()); value != "" {
+				m.remember(value)
 				if strings.HasPrefix(value, "/") && !strings.Contains(value, "\n") {
 					return m.runCommand(value)
 				}
@@ -446,7 +479,7 @@ func (m shellModel) keyHint() string {
 	case m.busy:
 		return "Esc interrupt"
 	default:
-		return "Enter send · Alt+Enter newline · Ctrl+C exit"
+		return "Enter send · Alt+Enter newline · ↑ history · Ctrl+C exit"
 	}
 }
 
@@ -479,4 +512,23 @@ func describeTool(call model.ToolCall) string {
 	default:
 		return SafeText(call.Name)
 	}
+}
+
+func (m shellModel) browsing() bool { return m.promptIndex < len(m.prompts) }
+
+// remember records a submitted prompt for ↑ recall, skipping repeats.
+func (m *shellModel) remember(prompt string) {
+	if n := len(m.prompts); n == 0 || m.prompts[n-1] != prompt {
+		m.prompts = append(m.prompts, prompt)
+		if len(m.prompts) > 100 {
+			m.prompts = m.prompts[len(m.prompts)-100:]
+		}
+	}
+	m.promptIndex, m.draft = len(m.prompts), ""
+}
+
+func (m *shellModel) setComposer(value string) {
+	m.composer.SetValue(value)
+	m.resizeComposer()
+	m.commandIndex = 0
 }
