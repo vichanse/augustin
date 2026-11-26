@@ -68,14 +68,14 @@ type shellModel struct {
 
 func newShellModel(path, provider, model string, color bool) shellModel {
 	composer := textarea.New()
-	composer.Placeholder = "Ask Augustin about this workspace"
+	composer.Placeholder = ""
 	composer.Prompt = "❯ "
 	composer.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	composer.BlurredStyle.CursorLine = lipgloss.NewStyle()
 	composer.ShowLineNumbers = false
 	composer.CharLimit = 8192
 	composer.SetWidth(80)
-	composer.SetHeight(3)
+	composer.SetHeight(1)
 	if !color {
 		composer.FocusedStyle = textarea.Style{}
 		composer.BlurredStyle = textarea.Style{}
@@ -139,6 +139,7 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if e.err != nil {
 			m.status = "Request failed: " + SafeText(e.err.Error()) + "; retry your prompt."
 			m.composer.SetValue(m.submitted)
+			m.resizeComposer()
 		} else {
 			m.history = append(m.history, model.Message{Role: model.RoleUser, Content: m.submitted}, model.Message{Role: model.RoleAssistant, Content: e.answer})
 			if len(m.history) > 20 {
@@ -180,6 +181,7 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, nil
 				case "tab":
 					m.composer.SetValue(matches[m.commandIndex].name)
+					m.resizeComposer()
 					m.commandIndex = 0
 					return m, nil
 				case "enter":
@@ -210,6 +212,7 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.scroll = 0
 				m.submitted = value
 				m.composer.Reset()
+				m.resizeComposer()
 				if m.turn != nil {
 					m.busy = true
 					m.started = time.Now()
@@ -234,6 +237,7 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if before != m.composer.Value() {
 		m.commandIndex = 0
 	}
+	m.resizeComposer()
 	return m, cmd
 }
 
@@ -357,4 +361,13 @@ func (m shellModel) markdown(answer string) string {
 		return safe
 	}
 	return strings.TrimSpace(rendered)
+}
+
+func (m *shellModel) resizeComposer() {
+	width := max(1, m.composer.Width()-2)
+	lines := 0
+	for _, line := range strings.Split(m.composer.Value(), "\n") {
+		lines += max(1, (lipgloss.Width(line)+width-1)/width)
+	}
+	m.composer.SetHeight(min(lines, max(1, min(6, m.height/4))))
 }
