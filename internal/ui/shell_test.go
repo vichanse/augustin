@@ -220,3 +220,46 @@ func TestSpinnerStopsBetweenTurns(t *testing.T) {
 		t.Fatal("spinner not ticking during a turn")
 	}
 }
+
+func TestPromptHistoryRecall(t *testing.T) {
+	up, down := tea.KeyMsg{Type: tea.KeyUp}, tea.KeyMsg{Type: tea.KeyDown}
+	m := newShellModel("/workspace", "openai", "test", false)
+	m.composer.Focus()
+	for _, p := range []string{"first", "/model", "/model", "second\nline"} {
+		m.remember(p)
+	}
+	m.composer.SetValue("draft")
+	var next tea.Model = m
+	value := func() string { return next.(shellModel).composer.Value() }
+	press := func(k tea.KeyMsg) { next, _ = next.Update(k) }
+
+	press(up)
+	if value() != "second\nline" {
+		t.Fatalf("↑ should recall the newest prompt, got %q", value())
+	}
+	press(up) // cursor ends on line 2 of the recalled prompt: ↑ moves inside it first
+	press(up)
+	if value() != "/model" {
+		t.Fatalf("repeated prompt not collapsed or ↑ stuck, got %q", value())
+	}
+	press(up) // the slash menu must not capture ↑ while browsing
+	press(up) // already oldest: stays put
+	if value() != "first" {
+		t.Fatalf("↑ did not reach the oldest prompt, got %q", value())
+	}
+	press(down)
+	press(down)
+	press(down)
+	if value() != "draft" {
+		t.Fatalf("↓ past the newest prompt should restore the draft, got %q", value())
+	}
+}
+
+func TestSubmitRecordsPrompt(t *testing.T) {
+	m := newShellModel("/workspace", "openai", "test", false)
+	m.composer.SetValue("/mo")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // runs /model from the menu
+	if got := next.(shellModel).prompts; len(got) != 1 || got[0] != "/model" {
+		t.Fatalf("menu command not recorded: %q", got)
+	}
+}
