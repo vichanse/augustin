@@ -15,21 +15,48 @@ import (
 	"github.com/vichanse/augustin/internal/events"
 	"github.com/vichanse/augustin/internal/model"
 	"github.com/vichanse/augustin/internal/tools"
+	"github.com/vichanse/augustin/internal/trust"
 	"github.com/vichanse/augustin/internal/ui"
 )
 
 func run(args []string, out, errOut io.Writer) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+	if len(args) > 0 && args[0] == "trust" {
+		return runTrust(args[1:], out, errOut)
+	}
 	if len(args) == 0 && ui.Interactive(os.Stdin) && ui.Interactive(out) {
 		path, err := os.Getwd()
 		if err != nil {
 			fmt.Fprintln(errOut, "cannot resolve current workspace")
 			return 1
 		}
-		accepted, err := ui.ConfirmWorkspace(ctx, os.Stdin, out, path, ui.ColorEnabled(out, os.LookupEnv))
+		path, err = trust.Canonical(path)
 		if err != nil {
 			return 1
+		}
+		store, err := trust.Default()
+		if err != nil {
+			fmt.Fprintln(errOut, "cannot locate trust store")
+			return 1
+		}
+		accepted, err := store.Contains(path)
+		if err != nil {
+			fmt.Fprintln(errOut, "cannot read trust store; use augustin trust clear to reset")
+			return 1
+		}
+		if !accepted {
+			var permanent bool
+			accepted, permanent, err = ui.ConfirmWorkspace(ctx, os.Stdin, out, path, ui.ColorEnabled(out, os.LookupEnv), trust.PersistentAllowed(path))
+			if err != nil {
+				return 1
+			}
+			if accepted && permanent {
+				if err := store.Add(path); err != nil {
+					fmt.Fprintln(errOut, "cannot save workspace trust")
+					return 1
+				}
+			}
 		}
 		if accepted {
 			c, err := config.Load(os.LookupEnv)
@@ -178,4 +205,38 @@ func (d *turnDiagnostic) Emit(e events.Event) {
 			d.summary = string(e.Reason)
 		}
 	}
+}
+
+func runTrust(args []string, out, errOut io.Writer) int {
+	store, err := trust.Default()
+	if err != nil {
+		fmt.Fprintln(errOut, "cannot locate trust store")
+		return 1
+	}
+	switch {
+	case len(args) == 1 && args[0] == "list":
+		var paths []string
+		paths, err = store.List()
+		if err == nil {
+			for _, path := range paths {
+				fmt.Fprintln(out, ui.SafeText(path))
+			}
+		}
+	case len(args) == 2 && args[0] == "revoke":
+		var path string
+		path, err = trust.Canonical(args[1])
+		if err == nil {
+			err = store.Revoke(path)
+		}
+	case len(args) == 1 && args[0] == "clear":
+		err = store.Clear()
+	default:
+		fmt.Fprintln(errOut, "Usage: augustin trust list | revoke PATH | clear")
+		return 2
+	}
+	if err != nil {
+		fmt.Fprintln(errOut, "trust operation failed")
+		return 1
+	}
+	return 0
 }
