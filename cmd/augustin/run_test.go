@@ -38,7 +38,7 @@ func TestReadOnlyRun(t *testing.T) {
 		), nil
 	}
 	var out, stderr bytes.Buffer
-	args := []string{"run", "--workspace", dir, "read fixture"}
+	args := []string{"run", "--json", "--workspace", dir, "read fixture"}
 	if code := runWith(context.Background(), args, &out, &stderr, lookup, factory); code != 0 || out.String() != "done\n" || !strings.Contains(stderr.String(), "tool.completed") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, out.String(), stderr.String())
 	}
