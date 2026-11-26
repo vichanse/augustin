@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/vichanse/augustin/internal/events"
 	"github.com/vichanse/augustin/internal/model"
 )
 
@@ -22,6 +23,7 @@ type Loop struct {
 	Provider      model.Provider
 	Executor      Executor
 	MaxIterations int
+	Events        events.Sink
 }
 
 type Result struct {
@@ -29,8 +31,35 @@ type Result struct {
 	Iterations int
 }
 
-func (l Loop) Run(ctx context.Context, req model.Request) (Result, error) {
-	result := Result{Messages: append([]model.Message(nil), req.Messages...)}
+func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr error) {
+	result = Result{Messages: append([]model.Message(nil), req.Messages...)}
+	sequence := 0
+	emit := func(e events.Event) {
+		if l.Events != nil {
+			sequence++
+			e.Sequence = sequence
+			e.Iteration = result.Iterations
+			l.Events.Emit(e)
+		}
+	}
+	emit(events.Event{Kind: events.AgentStarted})
+	defer func() {
+		kind := events.AgentFailed
+		reason := events.ExecutionError
+		switch {
+		case runErr == nil:
+			kind, reason = events.AgentCompleted, events.Success
+		case errors.Is(runErr, context.Canceled):
+			reason = events.Canceled
+		case errors.Is(runErr, context.DeadlineExceeded):
+			reason = events.Deadline
+		case errors.Is(runErr, ErrIterationLimit):
+			reason = events.IterationLimit
+		case errors.Is(runErr, ErrInvalidResponse):
+			reason = events.InvalidModel
+		}
+		emit(events.Event{Kind: kind, Reason: reason})
+	}()
 	if l.Provider == nil || l.MaxIterations <= 0 {
 		return result, errors.New("provider and positive iteration limit required")
 	}
@@ -44,13 +73,16 @@ func (l Loop) Run(ctx context.Context, req model.Request) (Result, error) {
 		}
 		req.Messages = append([]model.Message(nil), result.Messages...)
 		result.Iterations++
+		emit(events.Event{Kind: events.ModelRequested})
 		response, err := l.Provider.Complete(ctx, req)
 		if err != nil {
+			emit(events.Event{Kind: events.ModelFailed})
 			return result, fmt.Errorf("model completion: %w", err)
 		}
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
+		emit(events.Event{Kind: events.ModelCompleted, InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens})
 		msg := response.Message
 		if msg.Role != model.RoleAssistant {
 			return result, ErrInvalidResponse
@@ -81,13 +113,16 @@ func (l Loop) Run(ctx context.Context, req model.Request) (Result, error) {
 			if err := ctx.Err(); err != nil {
 				return result, err
 			}
+			emit(events.Event{Kind: events.ToolRequested})
 			output, err := l.Executor.Execute(ctx, call)
 			if err != nil {
+				emit(events.Event{Kind: events.ToolFailed})
 				return result, fmt.Errorf("tool execution: %w", err)
 			}
 			if err := ctx.Err(); err != nil {
 				return result, err
 			}
+			emit(events.Event{Kind: events.ToolCompleted})
 			result.Messages = append(result.Messages, model.Message{
 				Role: model.RoleTool, Content: output, ToolCallID: call.ID,
 			})
