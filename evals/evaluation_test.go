@@ -70,7 +70,7 @@ func TestDiscountDiagnosis(t *testing.T) {
 	l := agent.Loop{Provider: &diagnosisProvider{}, Executor: executor, MaxIterations: 3}
 	r, err := l.Run(context.Background(), model.Request{
 		Messages: []model.Message{{Role: model.RoleUser, Content: "Read discount.go and identify the discount calculation bug."}},
-		Tools: []model.ToolDefinition{{Name: "read_file", InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`)}},
+		Tools:    []model.ToolDefinition{{Name: "read_file", InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`)}},
 	})
 	if err != nil {
 		t.Fatal(err)
