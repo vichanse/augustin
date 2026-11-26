@@ -133,9 +133,10 @@ func (m *shellModel) sessionCommand(command string) {
 			m.session = s
 			m.history = s.History
 			for _, msg := range m.history {
-				if msg.Role == model.RoleAssistant {
-					m.rendered = append(m.rendered, m.markdown(msg.Content))
-					m.turnDetails = append(m.turnDetails, "")
+				if msg.Role == model.RoleUser {
+					m.pending = append(m.pending, m.userLine(msg.Content))
+				} else {
+					m.pending = append(m.pending, m.paint("Augustin", "99")+"\n"+m.markdown(msg.Content))
 				}
 			}
 			m.commandNotice = "Resumed " + SafeText(s.Name)
@@ -188,7 +189,7 @@ func (m *shellModel) sessionCommand(command string) {
 }
 
 func (m *shellModel) resetConversation() {
-	m.history, m.rendered, m.turnDetails, m.activity = nil, nil, nil, nil
+	m.history, m.activity = nil, nil
 	m.partial, m.partialRendered, m.status, m.submitted = "", "", "", ""
 	m.tokens, m.toolCalls, m.elapsed = 0, 0, 0
 	m.session = savedSession{}

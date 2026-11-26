@@ -15,18 +15,20 @@ import (
 
 func TestShellLayout(t *testing.T) {
 	m := newShellModel("/workspace", "openai", "test", false)
-	view := m.View()
-	for _, want := range []string{"AUGUSTIN", "/workspace", "openai", "READ ONLY", "Enter send"} {
-		if !strings.Contains(view, want) {
-			t.Errorf("missing %q", want)
+	banner := m.banner()
+	for _, want := range []string{"AUGUSTIN", "/workspace", "openai"} {
+		if !strings.Contains(banner, want) {
+			t.Errorf("banner missing %q", want)
 		}
 	}
-	if lipgloss.Height(view) != 24 {
-		t.Fatalf("unexpected height: %d", lipgloss.Height(view))
+	view := m.View()
+	for _, want := range []string{"READ ONLY", "Enter send"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("live area missing %q", want)
+		}
 	}
-	next, _ := m.Update(tea.WindowSizeMsg{Width: 20, Height: 8})
-	if !strings.Contains(next.View(), "Resize terminal") {
-		t.Fatal("missing small terminal fallback")
+	if strings.Contains(view, "AUGUSTIN") || lipgloss.Height(view) > 8 {
+		t.Fatalf("live area should stay compact:\n%s", view)
 	}
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd == nil {
@@ -78,15 +80,28 @@ func TestLiveHarnessEvents(t *testing.T) {
 	}
 }
 
-func TestConversationScroll(t *testing.T) {
+func TestFinishedTurnGoesToScrollback(t *testing.T) {
 	m := newShellModel("/workspace", "openai", "test", false)
-	m.history = []model.Message{{Role: model.RoleUser, Content: "first prompt"}, {Role: model.RoleAssistant, Content: strings.Repeat("answer line\n", 50)}}
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
-	if next.(shellModel).scroll == 0 {
-		t.Fatal("page up did not scroll")
+	m.busy, m.submitted = true, "hello"
+	next, cmd := m.Update(turnDone{answer: "world"})
+	got := next.(shellModel)
+	if cmd == nil || len(got.pending) != 0 {
+		t.Fatal("finished turn was not printed")
 	}
-	next, _ = next.Update(tea.KeyMsg{Type: tea.KeyPgDown})
-	if next.(shellModel).scroll != 0 {
-		t.Fatal("page down did not restore bottom")
+	if view := got.View(); strings.Contains(view, "world") || strings.Contains(view, "hello") {
+		t.Fatalf("finished turn still drawn in live area:\n%s", view)
+	}
+	next, cmd = got.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil || next.(shellModel).commandNotice != "" {
+		t.Fatal("empty submit should do nothing")
+	}
+}
+
+func TestCommandOutputGoesToScrollback(t *testing.T) {
+	m := newShellModel("/workspace", "openai", "test", false)
+	m.composer.SetValue("/model")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil || next.(shellModel).commandNotice != "" || strings.Contains(next.View(), "openai · test") {
+		t.Fatal("command output was not moved to scrollback")
 	}
 }
