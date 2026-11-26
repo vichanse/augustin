@@ -30,6 +30,7 @@ const (
 	IterationLimit Reason = "iteration_limit"
 	InvalidModel   Reason = "invalid_model_response"
 	ExecutionError Reason = "execution_error"
+	BudgetExceeded Reason = "budget_exceeded"
 )
 
 // Event deliberately excludes prompts, arguments, outputs and raw errors.
