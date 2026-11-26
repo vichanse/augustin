@@ -8,6 +8,7 @@ import (
 
 	"github.com/vichanse/augustin/internal/model"
 	"github.com/vichanse/augustin/internal/model/modeltest"
+	"github.com/vichanse/augustin/internal/tools"
 )
 
 type executorFunc func(context.Context, model.ToolCall) (string, error)
@@ -88,5 +89,25 @@ func TestLoopFailures(t *testing.T) {
 				t.Fatalf("got %v, want %v", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestRecoverDirectoryRequired(t *testing.T) {
+	calls := 0
+	p := providerFunc(func(_ context.Context, req model.Request) (model.Response, error) {
+		calls++
+		if calls == 1 {
+			return toolResponse("list_files"), nil
+		}
+		if got := req.Messages[len(req.Messages)-1].Content; got != "Tool error: directory_required" {
+			t.Fatalf("unexpected recovery message: %q", got)
+		}
+		return model.Response{FinishReason: model.FinishStop, Message: model.Message{Role: model.RoleAssistant, Content: "recovered"}}, nil
+	})
+	l := Loop{Provider: p, MaxIterations: 2, Executor: executorFunc(func(context.Context, model.ToolCall) (string, error) {
+		return "", tools.ErrDirectoryRequired
+	})}
+	if _, err := l.Run(context.Background(), model.Request{Tools: []model.ToolDefinition{{Name: "list_files"}}}); err != nil {
+		t.Fatal(err)
 	}
 }
