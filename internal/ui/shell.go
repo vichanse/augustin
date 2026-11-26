@@ -41,7 +41,7 @@ func (m shellModel) View() string {
 	w := max(1, m.width)
 	h := max(1, m.height)
 	if w < 32 || h < 12 {
-		return lipgloss.NewStyle().MaxWidth(w).MaxHeight(h).Render("Augustin · Resize terminal · Esc exit")
+		return lipgloss.NewStyle().MaxWidth(w).MaxHeight(h).Render("Resize terminal\nEsc to exit")
 	}
 	rule := m.paint(strings.Repeat("─", w), "240")
 	logo := m.paint("  ▄█▄  \n ██ ██ \n██▄▄▄██\n██   ██", "99")
