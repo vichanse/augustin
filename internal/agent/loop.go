@@ -180,6 +180,10 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 			}
 			toolName := safeToolName(call.Name)
 			emit(events.Event{Kind: events.ToolRequested, Tool: toolName})
+			// Display-only hook: it sees raw arguments, so sinks implementing it must not persist them.
+			if display, ok := l.Events.(interface{ ToolCall(model.ToolCall) }); ok {
+				display.ToolCall(call)
+			}
 			result.ToolCalls++
 			output, err := l.Executor.Execute(ctx, call)
 			if err != nil {

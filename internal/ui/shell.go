@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/vichanse/augustin/internal/model"
 	"github.com/vichanse/augustin/internal/version"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
@@ -23,13 +25,17 @@ type TurnFunc func(context.Context, []model.Message, string, events.Sink) (strin
 
 type liveEvent events.Event
 
+type liveToolCall model.ToolCall
+
 type eventSink struct {
 	emit  func(events.Event)
 	delta func(string)
+	call  func(liveToolCall)
 }
 
-func (s eventSink) Emit(e events.Event)   { s.emit(e) }
-func (s eventSink) TextDelta(text string) { s.delta(text) }
+func (s eventSink) Emit(e events.Event)          { s.emit(e) }
+func (s eventSink) TextDelta(text string)        { s.delta(text) }
+func (s eventSink) ToolCall(call model.ToolCall) { s.call(liveToolCall(call)) }
 
 type liveDelta string
 
@@ -60,6 +66,8 @@ type shellModel struct {
 	status                string
 	sink                  events.Sink
 	activity              []string
+	toolLabel             string
+	spinner               spinner.Model
 	started               time.Time
 	elapsed               time.Duration
 	toolCalls             int
@@ -88,7 +96,11 @@ func newShellModel(path, provider, model string, color bool) shellModel {
 		composer.FocusedStyle = textarea.Style{}
 		composer.BlurredStyle = textarea.Style{}
 	}
-	return shellModel{path: path, provider: provider, model: model, color: color, width: 80, height: 24, composer: composer}
+	spin := spinner.New(spinner.WithSpinner(spinner.Dot))
+	if color {
+		spin.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("99"))
+	}
+	return shellModel{path: path, provider: provider, model: model, color: color, width: 80, height: 24, composer: composer, spinner: spin}
 }
 
 func (m shellModel) Init() tea.Cmd {
@@ -124,6 +136,20 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case spinner.TickMsg:
+		if !m.busy {
+			return m, nil // stop the tick chain between turns
+		}
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(e)
+		return m, cmd
+	case liveToolCall:
+		// Tools run one at a time, so the last line is the one ToolRequested opened.
+		if m.busy && len(m.activity) > 0 {
+			m.toolLabel = describeTool(model.ToolCall(e))
+			m.activity[len(m.activity)-1] = "◌ " + m.toolLabel
+		}
+		return m, nil
 	case liveEvent:
 		if !m.busy {
 			return m, nil
@@ -132,22 +158,22 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case events.ModelRequested:
 			m.partial = ""
 			m.partialRendered = ""
-			m.activity = append(m.activity, fmt.Sprintf("Model request · iteration %d", e.Iteration))
 		case events.ModelCompleted:
 			m.tokens += e.InputTokens + e.OutputTokens
 		case events.ToolRequested:
 			m.partial = ""
 			m.partialRendered = ""
 			m.toolCalls++
-			m.activity = append(m.activity, "Running "+SafeText(e.Tool))
+			m.toolLabel = SafeText(e.Tool)
+			m.activity = append(m.activity, "◌ "+m.toolLabel)
 		case events.ToolCompleted:
-			m.activity = append(m.activity, "✓ "+SafeText(e.Tool))
+			m.setToolLine("✓ " + m.toolLabel)
 		case events.ToolFailed:
-			label := "Failed"
+			mark := "✗ "
 			if e.Recoverable {
-				label = "Recoverable"
+				mark = "! "
 			}
-			m.activity = append(m.activity, label+": "+SafeText(e.Tool)+" ("+SafeText(string(e.Reason))+")")
+			m.setToolLine(mark + m.toolLabel + " (" + SafeText(string(e.Reason)) + ")")
 		}
 		if len(m.activity) > 5 {
 			m.activity = append([]string(nil), m.activity[len(m.activity)-5:]...)
@@ -255,17 +281,18 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.activity = nil
 					m.toolCalls, m.tokens = 0, 0
 					m.status = "Working…"
+					m.toolLabel = ""
 					m.partial = ""
 					m.partialRendered = ""
 					m.lastRender = time.Time{}
 					turnCtx, cancel := context.WithCancel(m.ctx)
 					m.cancelTurn = cancel
 					history := append([]model.Message(nil), m.history...)
-					return m, func() tea.Msg {
+					return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
 						answer, err := m.turn(turnCtx, history, value, m.sink)
 						// Providers may surface cancellation as a transport error, so ask the context.
 						return turnDone{answer: answer, err: err, canceled: turnCtx.Err() != nil}
-					}
+					})
 				}
 			}
 			return m, nil
@@ -306,7 +333,11 @@ func (m shellModel) View() string {
 	rule := m.paint(strings.Repeat("─", w), "240")
 	var live string
 	if m.busy || m.status != "" {
-		live = m.userLine(m.submitted) + "\n" + m.activitySummary() + "\n" + m.status
+		status := m.status
+		if m.busy {
+			status = m.spinner.View() + " " + status
+		}
+		live = m.userLine(m.submitted) + "\n" + m.activitySummary() + "\n" + status
 		if m.partial != "" {
 			preview := m.partialRendered
 			if preview == "" {
@@ -352,6 +383,7 @@ func RunShell(ctx context.Context, in io.Reader, out io.Writer, path, provider, 
 	m.sink = eventSink{
 		emit:  func(e events.Event) { p.Send(liveEvent(e)) },
 		delta: func(text string) { p.Send(liveDelta(text)) },
+		call:  func(c liveToolCall) { p.Send(c) },
 	}
 	p = tea.NewProgram(m, tea.WithInput(in), tea.WithOutput(out), tea.WithContext(ctx), tea.WithoutSignalHandler())
 	_, err := p.Run()
@@ -363,7 +395,15 @@ func (m shellModel) activitySummary() string {
 	if m.busy {
 		elapsed = time.Since(m.started)
 	}
-	return strings.Join(m.activity, "\n") + fmt.Sprintf("\n%d tools · %d tokens · %s", m.toolCalls, m.tokens, elapsed.Round(time.Millisecond))
+	precision := time.Millisecond
+	if m.busy {
+		precision = time.Second // a ticking live timer reads better without milliseconds
+	}
+	stats := m.paint(fmt.Sprintf("%d tools · %d tokens · %s", m.toolCalls, m.tokens, elapsed.Round(precision)), "245")
+	if len(m.activity) == 0 {
+		return stats
+	}
+	return strings.Join(m.activity, "\n") + "\n" + stats
 }
 
 func (m shellModel) markdown(answer string) string {
@@ -410,5 +450,36 @@ func (m shellModel) keyHint() string {
 		return "Esc interrupt"
 	default:
 		return "Enter send · Alt+Enter newline · Ctrl+C exit"
+	}
+}
+
+func (m *shellModel) setToolLine(line string) {
+	if len(m.activity) > 0 {
+		m.activity[len(m.activity)-1] = line
+	}
+}
+
+// describeTool renders a call like Read(path) from untrusted model arguments.
+func describeTool(call model.ToolCall) string {
+	var args struct {
+		Path string `json:"path"`
+	}
+	_ = json.Unmarshal(call.Arguments, &args) // best effort: display only
+	target := SafeText(strings.ReplaceAll(args.Path, "\n", " "))
+	if r := []rune(target); len(r) > 60 {
+		target = "…" + string(r[len(r)-59:])
+	}
+	switch call.Name {
+	case "read_file":
+		return "Read(" + target + ")"
+	case "list_files":
+		if target == "" {
+			target = "."
+		}
+		return "List(" + target + ")"
+	case "workspace_overview":
+		return "Overview"
+	default:
+		return SafeText(call.Name)
 	}
 }
