@@ -12,8 +12,8 @@ import (
 	"github.com/vichanse/augustin/internal/model"
 
 	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/glamour"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
