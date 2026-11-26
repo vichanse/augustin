@@ -16,7 +16,7 @@ func TestRenderer(t *testing.T) {
 	r.Emit(events.Event{Kind: events.ToolRequested, Tool: "read_file"})
 	r.Emit(events.Event{Kind: events.ToolCompleted, Tool: "read_file"})
 	r.Emit(events.Event{Kind: events.AgentCompleted, Reason: events.Success, Iteration: 2})
-	for _, want := range []string{"Augustin", "[OK] read_file", "2 iterations", "1 tools", "10 input / 5 output tokens"} {
+	for _, want := range []string{"A U G U S T I N", "[OK] Reading source code  (read_file)", "2 iterations", "1 tools", "10 input / 5 output tokens"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in %q", want, out.String())
 		}
