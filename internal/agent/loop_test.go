@@ -1,0 +1,92 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+
+	"github.com/vichanse/augustin/internal/model"
+	"github.com/vichanse/augustin/internal/model/modeltest"
+)
+
+type executorFunc func(context.Context, model.ToolCall) (string, error)
+
+func (f executorFunc) Execute(ctx context.Context, call model.ToolCall) (string, error) {
+	return f(ctx, call)
+}
+
+type providerFunc func(context.Context, model.Request) (model.Response, error)
+
+func (f providerFunc) Complete(ctx context.Context, req model.Request) (model.Response, error) {
+	return f(ctx, req)
+}
+
+func toolResponse(name string) model.Response {
+	return model.Response{
+		FinishReason: model.FinishToolCalls,
+		Message: model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{
+			{ID: "1", Name: name, Arguments: json.RawMessage(`{}`)},
+		}},
+	}
+}
+
+func TestLoopToolRoundTrip(t *testing.T) {
+	calls := 0
+	p := providerFunc(func(_ context.Context, req model.Request) (model.Response, error) {
+		calls++
+		if calls == 1 {
+			return toolResponse("read"), nil
+		}
+		last := req.Messages[len(req.Messages)-1]
+		if last.Role != model.RoleTool || last.ToolCallID != "1" || last.Content != "data" {
+			t.Fatalf("unexpected tool result: %+v", last)
+		}
+		return model.Response{FinishReason: model.FinishStop, Message: model.Message{Role: model.RoleAssistant, Content: "done"}}, nil
+	})
+	l := Loop{Provider: p, MaxIterations: 2, Executor: executorFunc(func(_ context.Context, call model.ToolCall) (string, error) {
+		if call.Name != "read" {
+			t.Fatal("unexpected tool")
+		}
+		return "data", nil
+	})}
+	r, err := l.Run(context.Background(), model.Request{Tools: []model.ToolDefinition{{Name: "read"}}})
+	if err != nil || r.Iterations != 2 || len(r.Messages) != 3 {
+		t.Fatalf("result=%+v error=%v", r, err)
+	}
+}
+
+func TestLoopFailures(t *testing.T) {
+	failure := errors.New("failure")
+	for _, tc := range []struct {
+		name     string
+		step     modeltest.Step
+		execErr  error
+		canceled bool
+		want     error
+	}{
+		{name: "limit", step: modeltest.Step{Response: toolResponse("read")}, want: ErrIterationLimit},
+		{name: "unknown tool", step: modeltest.Step{Response: toolResponse("unknown")}, want: ErrInvalidResponse},
+		{name: "provider error", step: modeltest.Step{Err: failure}, want: failure},
+		{name: "tool error", step: modeltest.Step{Response: toolResponse("read")}, execErr: failure, want: failure},
+		{name: "canceled", canceled: true, want: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.canceled {
+				cancel()
+			}
+			l := Loop{Provider: modeltest.New(tc.step), MaxIterations: 1, Executor: executorFunc(func(_ context.Context, call model.ToolCall) (string, error) {
+				if call.Name != "read" {
+					t.Fatal("unauthorized tool executed")
+				}
+				return "", tc.execErr
+			})}
+			_, err := l.Run(ctx, model.Request{Tools: []model.ToolDefinition{{Name: "read"}}})
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("got %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
