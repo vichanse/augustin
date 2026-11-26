@@ -116,7 +116,17 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 		}
 		result.Iterations++
 		emit(events.Event{Kind: events.ModelRequested})
-		response, err := l.Provider.Complete(ctx, req)
+		var response model.Response
+		var err error
+		stream, canStream := l.Provider.(interface {
+			CompleteStream(context.Context, model.Request, func(string)) (model.Response, error)
+		})
+		sink, wantsStream := l.Events.(interface{ TextDelta(string) })
+		if canStream && wantsStream {
+			response, err = stream.CompleteStream(ctx, req, sink.TextDelta)
+		} else {
+			response, err = l.Provider.Complete(ctx, req)
+		}
 		if err != nil {
 			emit(events.Event{Kind: events.ModelFailed})
 			return result, fmt.Errorf("model completion: %w", err)

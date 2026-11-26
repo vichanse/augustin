@@ -58,6 +58,14 @@ type message struct {
 }
 
 func (p *Provider) Complete(ctx context.Context, req model.Request) (model.Response, error) {
+	return p.complete(ctx, req, nil)
+}
+
+func (p *Provider) CompleteStream(ctx context.Context, req model.Request, delta func(string)) (model.Response, error) {
+	return p.complete(ctx, req, delta)
+}
+
+func (p *Provider) complete(ctx context.Context, req model.Request, delta func(string)) (model.Response, error) {
 	var result model.Response
 	payload := struct {
 		Model               string    `json:"model"`
@@ -65,7 +73,13 @@ func (p *Provider) Complete(ctx context.Context, req model.Request) (model.Respo
 		Tools               []tool    `json:"tools,omitempty"`
 		MaxCompletionTokens int       `json:"max_completion_tokens"`
 		Store               bool      `json:"store"`
+		Stream              bool      `json:"stream,omitempty"`
+		StreamOptions       any       `json:"stream_options,omitempty"`
 	}{Model: p.name, MaxCompletionTokens: 4096}
+	if delta != nil {
+		payload.Stream = true
+		payload.StreamOptions = map[string]bool{"include_usage": true}
+	}
 	for _, m := range req.Messages {
 		wire := message{Role: m.Role, Content: m.Content, ToolCallID: m.ToolCallID}
 		for _, c := range m.ToolCalls {
@@ -96,6 +110,9 @@ func (p *Provider) Complete(ctx context.Context, req model.Request) (model.Respo
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		return result, fmt.Errorf("OpenAI HTTP status %d", res.StatusCode)
+	}
+	if delta != nil {
+		return decodeStream(res.Body, delta)
 	}
 	data, err := io.ReadAll(io.LimitReader(res.Body, maxBody+1))
 	if err != nil || len(data) > maxBody {

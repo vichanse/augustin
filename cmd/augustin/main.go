@@ -241,3 +241,9 @@ func runTrust(args []string, out, errOut io.Writer) int {
 	}
 	return 0
 }
+
+func (d *turnDiagnostic) TextDelta(text string) {
+	if sink, ok := d.sink.(interface{ TextDelta(string) }); ok {
+		sink.TextDelta(text)
+	}
+}
