@@ -7,8 +7,8 @@ import (
 )
 
 func TestMatchingCommands(t *testing.T) {
-	if got := matchingCommands("/"); len(got) != 7 {
-		t.Fatalf("expected seven commands, got %d", len(got))
+	if got := matchingCommands("/"); len(got) != 12 {
+		t.Fatalf("expected twelve commands, got %d", len(got))
 	}
 	if got := matchingCommands("/mo"); len(got) != 1 || got[0].name != "/model" {
 		t.Fatal("model completion missing")
