@@ -9,17 +9,17 @@ import (
 type Capability string
 
 const (
-	Read Capability = "read"
-	Edit Capability = "edit"
+	Read    Capability = "read"
+	Edit    Capability = "edit"
 	Execute Capability = "execute"
 )
 
 type Mode string
 
 const (
-	ReadOnly Mode = "read-only"
-	Plan Mode = "plan"
-	EditWithApproval Mode = "edit-with-approval"
+	ReadOnly            Mode = "read-only"
+	Plan                Mode = "plan"
+	EditWithApproval    Mode = "edit-with-approval"
 	ExecuteWithApproval Mode = "execute-with-approval"
 )
 
@@ -27,9 +27,9 @@ const (
 type Approver func(context.Context, model.ToolCall) (bool, error)
 
 type Policy struct {
-	Mode Mode
+	Mode         Mode
 	Capabilities map[string]Capability
-	Approve Approver
+	Approve      Approver
 }
 
 func (p Policy) authorize(ctx context.Context, call model.ToolCall) error {
