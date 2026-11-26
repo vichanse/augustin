@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/vichanse/augustin/internal/model"
@@ -61,7 +62,7 @@ func (w *Workspace) readFile(ctx context.Context, call model.ToolCall) (string, 
 	if err != nil {
 		return "", err
 	}
-	info, err := w.root.Stat(path)
+	info, err := w.checkedStat(path)
 	if err != nil {
 		return "", err
 	}
@@ -98,7 +99,7 @@ func (w *Workspace) listFiles(ctx context.Context, call model.ToolCall) (string,
 	if err != nil {
 		return "", err
 	}
-	info, err := w.root.Stat(path)
+	info, err := w.checkedStat(path)
 	if err != nil {
 		return "", err
 	}
@@ -122,10 +123,11 @@ func (w *Workspace) listFiles(ctx context.Context, call model.ToolCall) (string,
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		if entry.Type()&fs.ModeSymlink == 0 {
+		if entry.Type()&fs.ModeSymlink == 0 && !sensitiveName(entry.Name()) {
 			names = append(names, entry.Name())
 		}
 	}
+	sort.Strings(names)
 	data, err := json.Marshal(names)
 	return string(data), err
 }
