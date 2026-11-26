@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -85,7 +84,7 @@ func newShellModel(path, provider, model string, color bool) shellModel {
 }
 
 func (m shellModel) Init() tea.Cmd {
-	return tea.Batch(textarea.Blink, tea.SetWindowTitle("▲ Augustin — "+strings.ReplaceAll(SafeText(filepath.Base(m.path)), "\n", " ")))
+	return tea.Batch(textarea.Blink, tea.SetWindowTitle("▲ Augustin Code"))
 }
 
 func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
