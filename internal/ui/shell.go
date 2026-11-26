@@ -2,8 +2,12 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
+	"time"
+
+	"github.com/vichanse/augustin/internal/events"
 
 	"github.com/vichanse/augustin/internal/model"
 
@@ -12,7 +16,13 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-type TurnFunc func(context.Context, []model.Message, string) (string, error)
+type TurnFunc func(context.Context, []model.Message, string, events.Sink) (string, error)
+
+type liveEvent events.Event
+
+type eventSink func(events.Event)
+
+func (s eventSink) Emit(e events.Event) { s(e) }
 
 type turnDone struct {
 	answer string
@@ -30,6 +40,12 @@ type shellModel struct {
 	history               []model.Message
 	busy                  bool
 	status                string
+	sink                  events.Sink
+	activity              []string
+	started               time.Time
+	elapsed               time.Duration
+	toolCalls             int
+	tokens                int
 }
 
 func newShellModel(path, provider, model string, color bool) shellModel {
@@ -51,7 +67,34 @@ func (m shellModel) Init() tea.Cmd { return textarea.Blink }
 
 func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch e := msg.(type) {
+	case liveEvent:
+		if !m.busy {
+			return m, nil
+		}
+		e := events.Event(e)
+		switch e.Kind {
+		case events.ModelRequested:
+			m.activity = append(m.activity, fmt.Sprintf("Model request · iteration %d", e.Iteration))
+		case events.ModelCompleted:
+			m.tokens += e.InputTokens + e.OutputTokens
+		case events.ToolRequested:
+			m.toolCalls++
+			m.activity = append(m.activity, "Running "+SafeText(e.Tool))
+		case events.ToolCompleted:
+			m.activity = append(m.activity, "✓ "+SafeText(e.Tool))
+		case events.ToolFailed:
+			label := "Failed"
+			if e.Recoverable {
+				label = "Recoverable"
+			}
+			m.activity = append(m.activity, label+": "+SafeText(e.Tool)+" ("+SafeText(string(e.Reason))+")")
+		}
+		if len(m.activity) > 5 {
+			m.activity = append([]string(nil), m.activity[len(m.activity)-5:]...)
+		}
+		return m, nil
 	case turnDone:
+		m.elapsed = time.Since(m.started)
 		m.busy = false
 		if e.err != nil {
 			m.status = "Request failed: " + SafeText(e.err.Error()) + "; retry your prompt."
@@ -80,9 +123,12 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.composer.Reset()
 				if m.turn != nil {
 					m.busy = true
+					m.started = time.Now()
+					m.activity = nil
+					m.toolCalls, m.tokens = 0, 0
 					m.status = "Working…"
 					return m, func() tea.Msg {
-						answer, err := m.turn(m.ctx, append([]model.Message(nil), m.history...), value)
+						answer, err := m.turn(m.ctx, append([]model.Message(nil), m.history...), value, m.sink)
 						return turnDone{answer: answer, err: err}
 					}
 				}
@@ -128,6 +174,16 @@ func (m shellModel) View() string {
 	if m.busy {
 		welcome += "\nYou:\n" + SafeText(m.submitted)
 	}
+	if len(m.activity) > 0 {
+		welcome += "\n" + strings.Join(m.activity, "\n")
+	}
+	if !m.started.IsZero() {
+		elapsed := m.elapsed
+		if m.busy {
+			elapsed = time.Since(m.started)
+		}
+		welcome += fmt.Sprintf("\n%d tools · %d tokens · %s", m.toolCalls, m.tokens, elapsed.Round(time.Millisecond))
+	}
 	if m.status != "" {
 		welcome += "\n" + m.status
 	}
@@ -152,9 +208,13 @@ func (m shellModel) View() string {
 
 func RunShell(ctx context.Context, in io.Reader, out io.Writer, path, provider, model string, color bool, turn TurnFunc) error {
 	m := newShellModel(path, provider, model, color)
-	m.ctx, m.turn = ctx, turn
+	sessionCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	m.ctx, m.turn = sessionCtx, turn
 	m.composer.Focus()
-	p := tea.NewProgram(m, tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen(), tea.WithContext(ctx), tea.WithoutSignalHandler())
+	var p *tea.Program
+	m.sink = eventSink(func(e events.Event) { p.Send(liveEvent(e)) })
+	p = tea.NewProgram(m, tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen(), tea.WithContext(ctx), tea.WithoutSignalHandler())
 	_, err := p.Run()
 	return err
 }
