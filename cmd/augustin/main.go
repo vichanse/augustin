@@ -64,7 +64,7 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, lookup c
 	if *jsonMode || !ui.Interactive(errOut) {
 		sink = events.NewJSONL(errOut)
 	} else {
-		sink = ui.NewStyled(errOut, ui.ColorEnabled(errOut, lookup))
+		sink = ui.NewSession(errOut, ui.ColorEnabled(errOut, lookup), c.Provider, c.Model, flags.Arg(0))
 	}
 	loop := agent.Loop{
 		Provider:      p,
@@ -88,7 +88,7 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, lookup c
 		fmt.Fprintln(errOut, "Augustin run failed; inspect execution events")
 		return 1
 	}
-	if _, err := fmt.Fprintln(out, ui.SafeText(result.Messages[len(result.Messages)-1].Content)); err != nil {
+	if _, err := fmt.Fprintln(out, ui.Answer(result.Messages[len(result.Messages)-1].Content, !*jsonMode && ui.ColorEnabled(out, lookup))); err != nil {
 		return 1
 	}
 	return 0
