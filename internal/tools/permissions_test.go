@@ -12,9 +12,9 @@ func TestCapabilityApproval(t *testing.T) {
 	ctx := context.Background()
 	call := model.ToolCall{Name: "edit"}
 	for _, tc := range []struct {
-		mode Mode
+		mode    Mode
 		approve bool
-		want bool
+		want    bool
 	}{
 		{ReadOnly, true, false},
 		{Plan, true, false},
