@@ -54,3 +54,26 @@ func TestWorkspace(t *testing.T) {
 		t.Fatal("external symlink accepted")
 	}
 }
+
+func TestListFilesRootArguments(t *testing.T) {
+	w, err := OpenWorkspace(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	r := New(w.Handlers(), []string{"read_file", "list_files"})
+	for _, args := range []string{`{}`, `{"path":""}`, `{"path":"."}`} {
+		got, err := r.Execute(context.Background(), model.ToolCall{Name: "list_files", Arguments: json.RawMessage(args)})
+		if err != nil || got != "[]" {
+			t.Fatalf("list %s: %q %v", args, got, err)
+		}
+	}
+	for _, args := range []string{`null`, `{"path":null}`, `{"path":"/"}`, `{"path":".."}`, `{"unknown":true}`} {
+		if _, err := r.Execute(context.Background(), model.ToolCall{Name: "list_files", Arguments: json.RawMessage(args)}); err == nil {
+			t.Fatalf("accepted invalid arguments %s", args)
+		}
+	}
+	if _, err := r.Execute(context.Background(), model.ToolCall{Name: "read_file", Arguments: json.RawMessage(`{}`)}); !errors.Is(err, ErrInvalidArguments) {
+		t.Fatalf("read without path: %v", err)
+	}
+}
