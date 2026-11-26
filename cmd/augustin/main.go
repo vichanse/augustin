@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 
@@ -17,11 +18,26 @@ import (
 	"github.com/vichanse/augustin/internal/tools"
 	"github.com/vichanse/augustin/internal/trust"
 	"github.com/vichanse/augustin/internal/ui"
+	"github.com/vichanse/augustin/internal/version"
 )
 
 func run(args []string, out, errOut io.Writer) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+	if len(args) == 1 && (args[0] == "--version" || args[0] == "version") {
+		fmt.Fprintln(out, "Augustin Code "+version.Current())
+		return 0
+	}
+	if len(args) == 1 && args[0] == "update" {
+		cmd := exec.CommandContext(ctx, "go", "install", "github.com/vichanse/augustin/cmd/augustin@latest")
+		cmd.Stdout, cmd.Stderr = out, errOut
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintln(errOut, "Augustin update failed; check Go installation and network access")
+			return 1
+		}
+		fmt.Fprintln(out, "Augustin installed in Go bin directory. Restart Augustin to use the installed version.")
+		return 0
+	}
 	if len(args) > 0 && args[0] == "trust" {
 		return runTrust(args[1:], out, errOut)
 	}
