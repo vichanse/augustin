@@ -54,7 +54,7 @@ func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case turnDone:
 		m.busy = false
 		if e.err != nil {
-			m.status = "Request failed; retry your prompt."
+			m.status = "Request failed: " + SafeText(e.err.Error()) + "; retry your prompt."
 			m.composer.SetValue(m.submitted)
 		} else {
 			m.history = append(m.history, model.Message{Role: model.RoleUser, Content: m.submitted}, model.Message{Role: model.RoleAssistant, Content: e.answer})
