@@ -194,7 +194,7 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 
 func safeToolName(name string) string {
 	switch name {
-	case "read_file", "list_files":
+	case "read_file", "list_files", "workspace_overview":
 		return name
 	default:
 		return "other"

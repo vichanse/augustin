@@ -39,8 +39,9 @@ func (w *Workspace) Close() error {
 
 func (w *Workspace) Handlers() map[string]Handler {
 	return map[string]Handler{
-		"read_file":  w.readFile,
-		"list_files": w.listFiles,
+		"read_file":          w.readFile,
+		"list_files":         w.listFiles,
+		"workspace_overview": w.overview,
 	}
 }
 
