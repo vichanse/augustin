@@ -15,6 +15,7 @@ import (
 	"github.com/vichanse/augustin/internal/events"
 	"github.com/vichanse/augustin/internal/model"
 	"github.com/vichanse/augustin/internal/tools"
+	"github.com/vichanse/augustin/internal/ui"
 )
 
 func run(args []string, out, errOut io.Writer) int {
@@ -25,7 +26,7 @@ func run(args []string, out, errOut io.Writer) int {
 
 func runWith(ctx context.Context, args []string, out, errOut io.Writer, lookup config.Lookup, factory func(config.Lookup) (model.Provider, error)) int {
 	if len(args) == 0 || (len(args) == 1 && (args[0] == "--help" || args[0] == "-h")) {
-		fmt.Fprintln(out, "Augustin — harness-first coding agent\nUsage: augustin run --workspace PATH PROMPT")
+		fmt.Fprintln(out, "Augustin — harness-first coding agent\nUsage: augustin run [--json] --workspace PATH PROMPT")
 		return 0
 	}
 	if args[0] != "run" {
@@ -34,9 +35,10 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, lookup c
 	}
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
+	jsonMode := flags.Bool("json", false, "emit JSONL execution events on stderr")
 	workspace := flags.String("workspace", "", "trusted disposable workspace")
 	if err := flags.Parse(args[1:]); err != nil || *workspace == "" || flags.NArg() != 1 || strings.TrimSpace(flags.Arg(0)) == "" {
-		fmt.Fprintln(errOut, "Usage: augustin run --workspace PATH PROMPT")
+		fmt.Fprintln(errOut, "Usage: augustin run [--json] --workspace PATH PROMPT")
 		return 2
 	}
 	c, err := config.Load(lookup)
@@ -55,7 +57,15 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, lookup c
 		fmt.Fprintln(errOut, "cannot initialize provider")
 		return 2
 	}
-	sink := events.NewJSONL(errOut)
+	var sink interface {
+		events.Sink
+		Err() error
+	}
+	if *jsonMode {
+		sink = events.NewJSONL(errOut)
+	} else {
+		sink = ui.New(errOut)
+	}
 	loop := agent.Loop{
 		Provider:      p,
 		Executor:      tools.New(w.Handlers(), []string{"read_file", "list_files"}),
