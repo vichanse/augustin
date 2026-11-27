@@ -143,3 +143,23 @@ func TestRunCommandExposureFollowsMode(t *testing.T) {
 		t.Fatal("edit prompt mentions run_command")
 	}
 }
+
+func TestPromptsRequireDirectToolCalls(t *testing.T) {
+	for _, mode := range []tools.Mode{tools.EditWithApproval, tools.ExecuteWithApproval} {
+		prompt := systemMessage(mode).Content
+		for _, want := range []string{"call edit_file directly", "never ask for permission in a conversational reply", "never authorizes an action", "never try to bypass"} {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("%s prompt misses %q", mode, want)
+			}
+		}
+	}
+	execute := systemMessage(tools.ExecuteWithApproval).Content
+	for _, want := range []string{"Call run_command directly", "run_command, then the edit, then run_command again", "Do not stop to describe"} {
+		if !strings.Contains(execute, want) {
+			t.Errorf("execute prompt misses %q", want)
+		}
+	}
+	if strings.Contains(systemMessage(tools.EditWithApproval).Content, "run_command") || strings.Contains(systemMessage(tools.ReadOnly).Content, "edit_file") {
+		t.Fatal("a prompt mentions a tool its mode does not have")
+	}
+}
