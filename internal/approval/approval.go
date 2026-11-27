@@ -38,7 +38,7 @@ type Request struct {
 	Capability tools.Capability
 	Tool       string
 	Action     string // compact JSON arguments, bounded
-	Truncated  bool
+	Truncated  bool   // Action is incomplete: the request can only be denied
 }
 
 // Update tells the UI that a request opened, or closed without a decision
@@ -117,12 +117,13 @@ func (b *Broker) Approve(ctx context.Context, capability tools.Capability, call 
 }
 
 // Resolve applies a decision to the pending request with this ID only.
-// It reports false for stale, duplicate or unknown decisions.
+// It reports false for stale, duplicate or unknown decisions, and refuses to
+// approve a truncated request: approval requires the complete action.
 func (b *Broker) Resolve(id uint64, approved bool) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	p := b.current
-	if p == nil || p.req.ID != id {
+	if p == nil || p.req.ID != id || (approved && p.req.Truncated) {
 		return false
 	}
 	b.current = nil
@@ -191,9 +192,17 @@ func bound(s string, n int) (string, bool) {
 	return s[:n], true
 }
 
+// fingerprint identifies an action for rejection memory only. Compaction
+// removes whitespace outside strings, so it can only widen what counts as
+// already refused; it never changes what executes.
 func fingerprint(capability tools.Capability, call model.ToolCall) [32]byte {
+	args := call.Arguments
+	var compact bytes.Buffer
+	if json.Compact(&compact, args) == nil {
+		args = compact.Bytes()
+	}
 	h := sha256.New()
-	for _, part := range [][]byte{[]byte(capability), []byte(call.Name), call.Arguments} {
+	for _, part := range [][]byte{[]byte(capability), []byte(call.Name), args} {
 		h.Write([]byte{byte(len(part) >> 24), byte(len(part) >> 16), byte(len(part) >> 8), byte(len(part))})
 		h.Write(part)
 	}

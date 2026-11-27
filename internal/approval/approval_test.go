@@ -281,3 +281,38 @@ func TestReadOnlyToolsNeedNoApproval(t *testing.T) {
 		t.Fatalf("read-only tool: out=%q err=%v prompts=%d", out, err, rec.opened())
 	}
 }
+
+func TestTruncatedRequestCanOnlyBeDenied(t *testing.T) {
+	b, _ := newBroker()
+	ch := approveAsync(b, context.Background(), `{"content":"`+strings.Repeat("x", 5000)+`"}`)
+	req := waitPending(t, b)
+	if !req.Truncated {
+		t.Fatal("oversized action not marked truncated")
+	}
+	if b.Resolve(req.ID, true) {
+		t.Fatal("broker approved an action the user could not fully see")
+	}
+	if _, ok := b.Pending(); !ok {
+		t.Fatal("refused approval dropped the request")
+	}
+	if !b.Resolve(req.ID, false) {
+		t.Fatal("deny refused")
+	}
+	if r := wait(t, ch); r.ok || r.err != nil {
+		t.Fatalf("truncated request: %+v", r)
+	}
+}
+
+func TestRejectionMemoryIgnoresInsignificantWhitespace(t *testing.T) {
+	b, rec := newBroker()
+	ch := approveAsync(b, context.Background(), `{"path":"a.txt"}`)
+	b.Resolve(waitPending(t, b).ID, false)
+	wait(t, ch)
+	if r := wait(t, approveAsync(b, context.Background(), "{ \"path\" :\n \"a.txt\" }")); r.ok || r.err != nil || rec.opened() != 1 {
+		t.Fatalf("whitespace variant re-prompted: %+v prompts=%d", r, rec.opened())
+	}
+	// Whitespace inside strings is meaningful and must still be asked about.
+	go b.Approve(context.Background(), tools.Edit, model.ToolCall{Name: "fake_write", Arguments: json.RawMessage(`{"path":"a .txt"}`)})
+	waitPending(t, b)
+	b.Close()
+}

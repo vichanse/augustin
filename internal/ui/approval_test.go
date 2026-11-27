@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/vichanse/augustin/internal/approval"
 	"github.com/vichanse/augustin/internal/events"
@@ -152,18 +154,117 @@ func TestWithdrawnApprovalClosesPanel(t *testing.T) {
 	}
 }
 
-func TestApprovalPanelSanitizesContent(t *testing.T) {
+func TestApprovalPanelEscapesInsteadOfHiding(t *testing.T) {
 	m := newShellModel("/workspace", "openai", "test", false)
-	m.approval = &approval.Request{ID: 1, Capability: "edit\x1b[2J", Tool: "fake\x1b]0;pwned\x07_write", Action: "{\"path\":\"\u202egnp.exe\"}\x1b[31m" + strings.Repeat("\nline", 20)}
+	m.approval = &approval.Request{ID: 1, Capability: "edit\x1b[2J", Tool: "fake\x1b]0;pwned\x07_write", Action: "{\"path\":\"a\u200bb\u202egnp.exe\"}\x1b[31m\xff"}
 	panel := m.approvalPanel()
-	if strings.ContainsAny(panel, "\x1b\x07\u202e") {
+	if strings.ContainsAny(panel, "\x1b\x07\u202e\u200b") {
 		t.Fatalf("control characters reached the terminal: %q", panel)
 	}
-	if !strings.Contains(panel, "… truncated") || strings.Count(panel, "line") > maxActionLines {
-		t.Fatal("action not bounded")
+	for _, want := range []string{`edit\u001b[2J`, `fake\u001b]0;pwned\u0007_write`, `a\u200bb\u202egnp.exe`, `\xff`} {
+		if !strings.Contains(panel, want) {
+			t.Errorf("hidden detail: %q not shown in\n%s", want, panel)
+		}
+	}
+	// Different actions must never look the same once rendered.
+	if visible("ab") == visible("a\u200bb") {
+		t.Fatal("distinct actions render identically")
 	}
 	if m.approval.Truncated {
 		t.Fatal("rendering mutated the request snapshot")
+	}
+}
+
+func TestActionLinesKeepEveryCharacter(t *testing.T) {
+	action := `{"path":"a  b   c","content":"` + strings.Repeat("x y ", 30) + `"}`
+	lines := actionLines(action, 16)
+	if strings.Join(lines, "") != visible(action) {
+		t.Fatal("wrapping dropped characters")
+	}
+	for _, l := range lines {
+		if lipgloss.Width(l) > 16 {
+			t.Fatalf("line wider than the panel: %q", l)
+		}
+	}
+}
+
+func TestBrokerTruncatedActionCannotBeApproved(t *testing.T) {
+	m, ch := pendingShell(t, `{"content":"`+strings.Repeat("x", 5000)+`"}`)
+	m.width, m.height = 400, 400 // even a huge terminal cannot show what the broker cut
+	if !m.approval.Truncated || m.previewComplete() {
+		t.Fatal("broker truncation not detected")
+	}
+	if !strings.Contains(m.approvalPanel(), "exceeds the 4 KiB preview limit") {
+		t.Fatal("truncation not explained")
+	}
+	next := press(m, down, tea.KeyMsg{Type: tea.KeyUp}, tea.KeyMsg{Type: tea.KeyTab})
+	if got := next.(shellModel); got.approval == nil || got.approvalChoice != choiceDeny {
+		t.Fatal("navigation reached Approve on a truncated action")
+	}
+	forced := next.(shellModel)
+	forced.approvalChoice = choiceApprove // even a forced choice is re-checked on Enter
+	if press(forced, enter).(shellModel).approval == nil {
+		t.Fatal("Enter approved a truncated action")
+	}
+	// The broker refuses too, whatever the UI does.
+	if m.approvals.Resolve(m.approval.ID, true) {
+		t.Fatal("broker approved a truncated request")
+	}
+	press(next, esc)
+	if d := outcome(t, ch); d.ok || d.err != nil {
+		t.Fatalf("truncated action must end denied: %+v", d)
+	}
+}
+
+func TestPreviewTooTallForTerminalCannotBeApproved(t *testing.T) {
+	m, ch := pendingShell(t, `{"content":"`+strings.Repeat("y", 1500)+`"}`)
+	m.width, m.height = 60, 24 // 1500 chars at 50 per line: 31 lines > 10
+	if m.approval.Truncated || m.previewComplete() {
+		t.Fatal("terminal-size truncation not detected")
+	}
+	panel := m.approvalPanel()
+	if !strings.Contains(panel, "Preview incomplete: action does not fit") || !strings.Contains(panel, "(unavailable)") {
+		t.Fatalf("disabled approval not shown:\n%s", panel)
+	}
+	if press(m, down).(shellModel).approvalChoice != choiceDeny {
+		t.Fatal("navigation reached Approve on an incomplete preview")
+	}
+	forced := m
+	forced.approvalChoice = choiceApprove
+	var next tea.Model = press(forced, enter)
+	if next.(shellModel).approval == nil {
+		t.Fatal("Enter approved an incomplete preview")
+	}
+	big, _ := next.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
+	if !big.(shellModel).previewComplete() || big.(shellModel).approvalChoice != choiceDeny {
+		t.Fatal("growing the terminal must enable approval without selecting it")
+	}
+	press(big, down, enter)
+	if d := outcome(t, ch); !d.ok || d.err != nil {
+		t.Fatalf("complete preview should be approvable: %+v", d)
+	}
+}
+
+func TestShrinkingTerminalDeselectsApprove(t *testing.T) {
+	m, ch := pendingShell(t, `{"content":"`+strings.Repeat("z", 600)+`"}`)
+	m.width, m.height = 200, 60
+	next := press(m, down)
+	if next.(shellModel).approvalChoice != choiceApprove {
+		t.Fatal("Approve not selectable on a complete preview")
+	}
+	next, _ = next.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	if next.(shellModel).approvalChoice != choiceDeny {
+		t.Fatal("resize left Approve selected on an incomplete preview")
+	}
+	// Even if the choice was stale, the decision path re-checks the current size.
+	stale := next.(shellModel)
+	stale.approvalChoice = choiceApprove
+	if press(stale, enter).(shellModel).approval == nil {
+		t.Fatal("stale Approve choice approved an incomplete preview")
+	}
+	press(stale, esc)
+	if d := outcome(t, ch); d.ok {
+		t.Fatal("incomplete preview was approved")
 	}
 }
 
@@ -208,5 +309,28 @@ func TestClosingShellReleasesPendingApproval(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("closing the shell did not release the pending approval")
+	}
+}
+
+func TestVisibleActionDecodesToTheExecutedValue(t *testing.T) {
+	for _, raw := range []string{
+		`{"path":"a\u200bb.go"}`,
+		"{\"path\":\"a\u200bb\u202e\u00a0\U000e0041 \\n.go\",\"n\":1}",
+		`{"content":"line1\nline2\t\"quoted\" \\ backslash"}`,
+	} {
+		var want, got any
+		if err := json.Unmarshal([]byte(raw), &want); err != nil {
+			t.Fatal(err)
+		}
+		shown := visible(raw)
+		if err := json.Unmarshal([]byte(shown), &got); err != nil {
+			t.Fatalf("preview is not valid JSON: %q: %v", shown, err)
+		}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("preview means something else:\nshown %q\nexecuted %q", shown, raw)
+		}
+		if strings.ContainsAny(shown, "\u200b\u202e\u00a0") || strings.Contains(shown, "\U000e0041") {
+			t.Fatalf("invisible character shown raw: %q", shown)
+		}
 	}
 }

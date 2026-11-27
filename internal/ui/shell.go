@@ -234,6 +234,9 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = e.Width, e.Height
 		m.composer.SetWidth(max(1, e.Width-2))
+		if m.approval != nil && !m.previewComplete() {
+			m.approvalChoice = choiceDeny // a smaller terminal must never leave Approve selected
+		}
 	case tea.KeyMsg:
 		// A pending approval owns the keyboard; Ctrl+C keeps its interrupt/exit meaning.
 		if m.approval != nil && e.String() != "ctrl+c" {
