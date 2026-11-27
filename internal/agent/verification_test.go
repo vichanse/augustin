@@ -93,88 +93,133 @@ func TestReadOnlyTurnFinishesWithoutVerification(t *testing.T) {
 	}
 }
 
-func TestPrematureCompletionGetsVerificationContinuation(t *testing.T) {
+func harnessCalls(msgs []model.Message) int {
+	n := 0
+	for _, m := range msgs {
+		for _, c := range m.ToolCalls {
+			if strings.HasPrefix(c.ID, "augustin-verify-") {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+func modelCalledTests(msgs []model.Message) bool {
+	for _, m := range msgs {
+		for _, c := range m.ToolCalls {
+			if c.Name == "run_command" && !strings.HasPrefix(c.ID, "augustin-verify-") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestHarnessRunsTestsWhenModelFinishesEarly(t *testing.T) {
 	exec := &evidenceExecutor{tracker: verification.New(true), tests: []int{0}}
-	p, seen := scripted(callTool("e1", "edit_file"), answer("Fixed. All tests pass."), callTool("t1", "run_command"), answer("Tests passed."))
+	p, seen := scripted(callTool("e1", "edit_file"), answer("Fixed. All tests pass."), answer("go test ./... passed."))
 	r, err := gateLoop(p, exec, 8).Run(context.Background(), model.Request{Tools: gateTools})
-	if err != nil || r.Verification.Status != verification.Passed || exec.ran != 1 || len(*seen) != 4 {
-		t.Fatalf("gate: %v %+v ran=%d calls=%d", err, r.Verification, exec.ran, len(*seen))
+	if err != nil || r.Verification.Status != verification.Passed || exec.ran != 1 || len(*seen) != 3 || harnessCalls(r.Messages) != 1 {
+		t.Fatalf("harness run: %v %+v ran=%d calls=%d", err, r.Verification, exec.ran, len(*seen))
 	}
-	if hasGateInstruction(r.Messages) != 1 || !strings.Contains((*seen)[2].Messages[len((*seen)[2].Messages)-1].Content, "Use run_command to request go test ./...") {
-		t.Fatal("the model was not told what verification is missing")
+	// Valid sequencing: the model's answer, then an assistant message carrying
+	// only the harness call, its tool result, then the harness note.
+	n := len(r.Messages)
+	call, result, note := r.Messages[n-4], r.Messages[n-3], r.Messages[n-2]
+	if call.Role != model.RoleAssistant || call.Content != "" || len(call.ToolCalls) != 1 || result.Role != model.RoleTool || result.ToolCallID != call.ToolCalls[0].ID || note.Role != model.RoleSystem {
+		t.Fatalf("message sequence: %+v / %+v / %+v", call, result, note)
 	}
-	if last := r.Messages[len(r.Messages)-1]; last.Role != model.RoleAssistant || last.Content != "Tests passed." {
-		t.Fatalf("final answer: %+v", last)
+	if r.Messages[n-5].Content != "Fixed. All tests pass." || r.Messages[n-1].Content != "go test ./... passed." {
+		t.Fatal("model answers misplaced")
+	}
+}
+
+// Regression: a real model kept asking for approval in prose instead of
+// calling run_command, until both continuations were used up.
+func TestModelAskingForConversationalApprovalStillGetsVerified(t *testing.T) {
+	ask := answer("I fixed it. Shall I run go test ./... now? Please confirm and I will run it.")
+	exec := &evidenceExecutor{tracker: verification.New(true), tests: []int{0}}
+	p, _ := scripted(callTool("e1", "edit_file"), ask, ask, ask, ask)
+	r, err := gateLoop(p, exec, 10).Run(context.Background(), model.Request{Tools: gateTools})
+	if err != nil || r.Verification.Status != verification.Passed || exec.ran != 1 || modelCalledTests(r.Messages) {
+		t.Fatalf("verification depended on the model: %v %+v ran=%d", err, r.Verification, exec.ran)
+	}
+	// Same model, failing tests and no fix: bounded, one run, a failed verdict.
+	exec = &evidenceExecutor{tracker: verification.New(true), tests: []int{1}}
+	p, seen := scripted(callTool("e1", "edit_file"), ask, ask, ask, ask)
+	r, err = gateLoop(p, exec, 10).Run(context.Background(), model.Request{Tools: gateTools})
+	if err != nil || r.Verification.Status != verification.Failed || exec.ran != 1 || len(*seen) != 4 {
+		t.Fatalf("failing tests: %v %+v ran=%d calls=%d", err, r.Verification, exec.ran, len(*seen))
 	}
 }
 
 func TestFailedVerificationAllowsCorrectionAndRerun(t *testing.T) {
 	exec := &evidenceExecutor{tracker: verification.New(true), tests: []int{1, 0}}
 	p, _ := scripted(callTool("e1", "edit_file"), callTool("t1", "run_command"), answer("Done."),
-		callTool("e2", "edit_file"), callTool("t2", "run_command"), answer("Fixed and verified."))
+		callTool("e2", "edit_file"), answer("Fixed."), answer("Verified."))
 	r, err := gateLoop(p, exec, 10).Run(context.Background(), model.Request{Tools: gateTools})
-	if err != nil || r.Verification.Status != verification.Passed || r.Verification.Attempts != 2 || r.Verification.Revision != 2 || hasGateInstruction(r.Messages) != 1 {
+	if err != nil || r.Verification.Status != verification.Passed || r.Verification.Attempts != 2 || r.Verification.Revision != 2 || harnessCalls(r.Messages) != 1 {
 		t.Fatalf("correction after failure: %v %+v", err, r.Verification)
 	}
+	found := false
 	for _, m := range r.Messages {
-		if m.Role == model.RoleSystem && !strings.Contains(m.Content, "did not pass") {
-			t.Fatalf("failure instruction: %q", m.Content)
-		}
+		found = found || (m.Role == model.RoleSystem && strings.Contains(m.Content, "did not pass"))
+	}
+	if !found {
+		t.Fatal("the failure instruction was not given")
 	}
 }
 
 func TestContinuationsAreBoundedAndUseExistingBudgets(t *testing.T) {
-	// The model keeps finishing without testing: two continuations, then stop.
-	exec := &evidenceExecutor{tracker: verification.New(true), tests: []int{0}}
+	// Tests fail and the model never fixes: one harness run, one instruction, stop.
+	exec := &evidenceExecutor{tracker: verification.New(true), tests: []int{1}}
 	p, seen := scripted(callTool("e1", "edit_file"), answer("done"), answer("done"), answer("done"), answer("never asked"))
 	r, err := gateLoop(p, exec, 10).Run(context.Background(), model.Request{Tools: gateTools})
-	if err != nil || len(*seen) != 4 || hasGateInstruction(r.Messages) != 2 || r.Iterations != 4 {
-		t.Fatalf("unbounded continuations: %v calls=%d gates=%d", err, len(*seen), hasGateInstruction(r.Messages))
+	if err != nil || len(*seen) != 4 || hasGateInstruction(r.Messages) != 2 || exec.ran != 1 || r.Verification.Status != verification.Failed {
+		t.Fatalf("unbounded continuations: %v calls=%d gates=%d ran=%d %+v", err, len(*seen), hasGateInstruction(r.Messages), exec.ran, r.Verification)
 	}
-	if r.Verification.Status != verification.Incomplete || r.Verification.Reason != "verification retries exhausted" {
-		t.Fatalf("verdict: %+v", r.Verification)
-	}
-	// Not enough iterations left for a test run and an answer: no continuation.
+	// No model call left for the synthesis: the harness does not run tests.
 	exec = &evidenceExecutor{tracker: verification.New(true), tests: []int{0}}
 	p, seen = scripted(callTool("e1", "edit_file"), answer("done"))
-	r, err = gateLoop(p, exec, 3).Run(context.Background(), model.Request{Tools: gateTools})
-	if err != nil || len(*seen) != 2 || r.Verification.Status != verification.Incomplete || r.Verification.Reason != "execution budget exhausted" {
-		t.Fatalf("iteration budget: %v calls=%d %+v", err, len(*seen), r.Verification)
+	r, err = gateLoop(p, exec, 2).Run(context.Background(), model.Request{Tools: gateTools})
+	if err != nil || len(*seen) != 2 || exec.ran != 0 || r.Verification.Status != verification.Incomplete || r.Verification.Reason != "execution budget exhausted" {
+		t.Fatalf("iteration budget: %v calls=%d ran=%d %+v", err, len(*seen), exec.ran, r.Verification)
 	}
-	// No tool call left: no continuation either.
+	// No tool call left: no run either.
 	exec = &evidenceExecutor{tracker: verification.New(true), tests: []int{0}}
 	p, seen = scripted(callTool("e1", "edit_file"), answer("done"))
 	l := gateLoop(p, exec, 10)
 	l.Budget.MaxToolCalls = 1
-	if r, err = l.Run(context.Background(), model.Request{Tools: gateTools}); err != nil || len(*seen) != 2 || r.Verification.Status != verification.Incomplete {
+	if r, err = l.Run(context.Background(), model.Request{Tools: gateTools}); err != nil || len(*seen) != 2 || exec.ran != 0 || r.Verification.Status != verification.Incomplete {
 		t.Fatalf("tool budget: %v calls=%d %+v", err, len(*seen), r.Verification)
+	}
+	// run_command not offered to this turn: never run by the harness.
+	exec = &evidenceExecutor{tracker: verification.New(true), tests: []int{0}}
+	p, _ = scripted(callTool("e1", "edit_file"), answer("done"))
+	if r, _ = gateLoop(p, exec, 10).Run(context.Background(), model.Request{Tools: []model.ToolDefinition{{Name: "edit_file"}}}); exec.ran != 0 || r.Verification.Status != verification.Incomplete {
+		t.Fatalf("harness ran a tool the turn does not have: ran=%d %+v", exec.ran, r.Verification)
 	}
 }
 
 func TestReservedFinalResponseNeverGetsTools(t *testing.T) {
+	// 3 iterations, the last reserved: the harness runs the tests between the
+	// premature answer and the reserved final response, which stays tool-free.
 	exec := &evidenceExecutor{tracker: verification.New(true), tests: []int{0}}
-	// 4 iterations, the last reserved: edit, premature answer, then the
-	// continuation would need a test run and an answer, but only the
-	// reserved final response is left after the test run.
-	p, seen := scripted(callTool("e1", "edit_file"), answer("done"), callTool("t1", "run_command"), answer("final"))
-	l := gateLoop(p, exec, 4)
+	p, seen := scripted(callTool("e1", "edit_file"), answer("done"), answer("final"))
+	l := gateLoop(p, exec, 3)
 	l.ReserveFinalResponse = true
 	r, err := l.Run(context.Background(), model.Request{Tools: gateTools})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i, req := range *seen {
-		if i == 3 && len(req.Tools) != 0 {
-			t.Fatal("tools restored in the reserved final response")
-		}
+	if err != nil || len(*seen) != 3 || len((*seen)[2].Tools) != 0 {
+		t.Fatalf("reserved final response: %v calls=%d", err, len(*seen))
 	}
 	if r.Verification.Status != verification.Passed || exec.ran != 1 {
 		t.Fatalf("verdict: %+v ran=%d", r.Verification, exec.ran)
 	}
-	// With one iteration less, the gate cannot continue at all.
+	// Finishing in the reserved final response itself: nothing more runs.
 	exec = &evidenceExecutor{tracker: verification.New(true), tests: []int{0}}
 	p, seen = scripted(callTool("e1", "edit_file"), answer("done"))
-	l = gateLoop(p, exec, 3)
+	l = gateLoop(p, exec, 2)
 	l.ReserveFinalResponse = true
 	if r, err = l.Run(context.Background(), model.Request{Tools: gateTools}); err != nil || len(*seen) != 2 || exec.ran != 0 || r.Verification.Status != verification.Incomplete {
 		t.Fatalf("no room: %v calls=%d ran=%d %+v", err, len(*seen), exec.ran, r.Verification)
@@ -184,18 +229,18 @@ func TestReservedFinalResponseNeverGetsTools(t *testing.T) {
 func TestTruncatedCompletionCannotBypassGate(t *testing.T) {
 	exec := &evidenceExecutor{tracker: verification.New(true), tests: []int{0}}
 	truncated := model.Response{FinishReason: model.FinishLength, Message: model.Message{Role: model.RoleAssistant, Content: "Fixed, tests pa"}}
-	p, seen := scripted(callTool("e1", "edit_file"), truncated, callTool("t1", "run_command"), answer("ok"))
+	p, seen := scripted(callTool("e1", "edit_file"), truncated, answer("ok"))
 	r, err := gateLoop(p, exec, 8).Run(context.Background(), model.Request{Tools: gateTools})
-	if err != nil || len(*seen) != 4 || exec.ran != 1 || r.Verification.Status != verification.Passed {
+	if err != nil || len(*seen) != 3 || exec.ran != 1 || r.Verification.Status != verification.Passed {
 		t.Fatalf("truncated answer bypassed the gate: %v calls=%d %+v", err, len(*seen), r.Verification)
 	}
 }
 
 func TestRejectedTestsEndWithoutInsisting(t *testing.T) {
 	exec := &evidenceExecutor{tracker: verification.New(true), tests: []int{-1}}
-	p, seen := scripted(callTool("e1", "edit_file"), answer("done"), callTool("t1", "run_command"), answer("You declined the tests."))
+	p, seen := scripted(callTool("e1", "edit_file"), answer("done"), answer("You declined the tests."), answer("never asked"))
 	r, err := gateLoop(p, exec, 10).Run(context.Background(), model.Request{Tools: gateTools})
-	if err != nil || len(*seen) != 4 || exec.ran != 1 || r.Verification.Status != verification.Rejected || hasGateInstruction(r.Messages) != 1 {
+	if err != nil || len(*seen) != 3 || exec.ran != 1 || r.Verification.Status != verification.Rejected || harnessCalls(r.Messages) != 1 {
 		t.Fatalf("after rejection: %v calls=%d ran=%d %+v", err, len(*seen), exec.ran, r.Verification)
 	}
 }

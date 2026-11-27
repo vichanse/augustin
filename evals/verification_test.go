@@ -47,12 +47,20 @@ func (p *claimingProvider) Complete(_ context.Context, req model.Request) (model
 		return call("edit-1", "edit_file", `{"path":"discount.go","old_string":"return price - price*discount/100","new_string":"return price - discount"}`)
 	case last.ToolCallID == "edit-1":
 		return stop("Fixed the discount calculation. All tests pass.") // unverified claim
-	case last.Role == model.RoleSystem && strings.Contains(last.Content, "no successful test run covers the latest revision"):
-		return call("test-1", "run_command", tests)
-	case last.ToolCallID == "test-1" && last.Content == "Tool error: user_rejected" && !p.retriedRun:
-		p.retriedRun = true
-		return call("test-2", "run_command", tests) // asks again: must not prompt the user twice
-	case strings.HasPrefix(last.ToolCallID, "test-"):
+	case last.Role == model.RoleSystem && last.Content == verification.HarnessRunNote:
+		// The harness ran the tests itself; its result precedes the note.
+		var result model.Message
+		for _, m := range req.Messages {
+			if m.Role == model.RoleTool && strings.HasPrefix(m.ToolCallID, "augustin-verify-") {
+				result = m
+			}
+		}
+		if result.Content == "Tool error: user_rejected" && !p.retriedRun {
+			p.retriedRun = true
+			return call("test-2", "run_command", tests) // asks again: must not prompt the user twice
+		}
+		return stop("Reported the test outcome.")
+	case last.ToolCallID == "test-2":
 		return stop("Reported the test outcome.")
 	}
 	return stop("unexpected: " + last.Content)

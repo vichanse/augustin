@@ -37,15 +37,21 @@ type liveEvent events.Event
 
 type liveToolCall model.ToolCall
 
+// liveEvidence is display-only: the registry's typed outcome of the running
+// tool, so a command line shows its real exit status, not just "completed".
+type liveEvidence tools.Evidence
+
 type eventSink struct {
-	emit  func(events.Event)
-	delta func(string)
-	call  func(liveToolCall)
+	emit     func(events.Event)
+	delta    func(string)
+	call     func(liveToolCall)
+	evidence func(liveEvidence)
 }
 
-func (s eventSink) Emit(e events.Event)          { s.emit(e) }
-func (s eventSink) TextDelta(text string)        { s.delta(text) }
-func (s eventSink) ToolCall(call model.ToolCall) { s.call(liveToolCall(call)) }
+func (s eventSink) Emit(e events.Event)           { s.emit(e) }
+func (s eventSink) TextDelta(text string)         { s.delta(text) }
+func (s eventSink) ToolCall(call model.ToolCall)  { s.call(liveToolCall(call)) }
+func (s eventSink) ToolEvidence(e tools.Evidence) { s.evidence(liveEvidence(e)) }
 
 type liveDelta string
 
@@ -78,6 +84,7 @@ type shellModel struct {
 	sink                  events.Sink
 	activity              []string
 	toolLabel             string
+	toolSettled           bool // evidence already decided the running tool's mark
 	spinner               spinner.Model
 	mdStyle               string
 	prompts               []string        // submitted this run, oldest first
@@ -169,7 +176,24 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Tools run one at a time, so the last line is the one ToolRequested opened.
 		if m.busy && len(m.activity) > 0 {
 			m.toolLabel = describeTool(model.ToolCall(e))
-			m.activity[len(m.activity)-1] = "◌ " + m.toolLabel
+			m.activity[len(m.activity)-1] = m.mark(markRunning) + m.toolLabel
+		}
+		return m, nil
+	case liveEvidence:
+		// ToolCompleted only means the tool returned: a command's mark comes
+		// from its actual status and exit code.
+		if m.busy && e.Capability == tools.Execute && e.Kind == tools.EvidenceApplied {
+			switch {
+			case e.Status == "exited" && e.ExitCode == 0:
+				m.setToolLine(m.mark(markOK) + m.toolLabel)
+			case e.Status == "exited":
+				m.setToolLine(m.mark(markFailed) + m.toolLabel + fmt.Sprintf(" (exit %d)", e.ExitCode))
+			case e.Status == "timeout":
+				m.setToolLine(m.mark(markWarning) + m.toolLabel + " (timed out)")
+			default:
+				m.setToolLine(m.mark(markWarning) + m.toolLabel + " (error)")
+			}
+			m.toolSettled = true
 		}
 		return m, nil
 	case liveEvent:
@@ -187,15 +211,19 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.partialRendered = ""
 			m.toolCalls++
 			m.toolLabel = SafeText(e.Tool)
-			m.activity = append(m.activity, "◌ "+m.toolLabel)
+			m.toolSettled = false
+			m.activity = append(m.activity, m.mark(markRunning)+m.toolLabel)
 		case events.ToolCompleted:
-			m.setToolLine("✓ " + m.toolLabel)
-		case events.ToolFailed:
-			mark := "✗ "
-			if e.Recoverable {
-				mark = "! "
+			if !m.toolSettled {
+				m.setToolLine(m.mark(markOK) + m.toolLabel)
 			}
-			m.setToolLine(mark + m.toolLabel + " (" + SafeText(string(e.Reason)) + ")")
+		case events.ToolFailed:
+			kind := markFailed
+			switch e.Reason {
+			case "user_rejected", events.Canceled, events.Deadline, events.BudgetExceeded:
+				kind = markWarning // refused or not completed, rather than failed
+			}
+			m.setToolLine(m.mark(kind) + m.toolLabel + " (" + SafeText(string(e.Reason)) + ")")
 		}
 		if len(m.activity) > 5 {
 			m.activity = append([]string(nil), m.activity[len(m.activity)-5:]...)
@@ -483,9 +511,10 @@ func RunShell(ctx context.Context, in io.Reader, out io.Writer, path, provider, 
 	m.composer.Focus()
 	var p *tea.Program
 	m.sink = eventSink{
-		emit:  func(e events.Event) { p.Send(liveEvent(e)) },
-		delta: func(text string) { p.Send(liveDelta(text)) },
-		call:  func(c liveToolCall) { p.Send(c) },
+		emit:     func(e events.Event) { p.Send(liveEvent(e)) },
+		delta:    func(text string) { p.Send(liveDelta(text)) },
+		call:     func(c liveToolCall) { p.Send(c) },
+		evidence: func(e liveEvidence) { p.Send(e) },
 	}
 	p = tea.NewProgram(m, tea.WithInput(in), tea.WithOutput(out), tea.WithContext(ctx), tea.WithoutSignalHandler())
 	if approvals != nil {
@@ -620,4 +649,27 @@ func (m shellModel) modeBadge() string {
 		return m.paint("● EXECUTE", "203") + " · every command and change needs approval"
 	}
 	return m.paint("● READ ONLY", "78")
+}
+
+type markKind int
+
+const (
+	markRunning markKind = iota
+	markOK
+	markFailed
+	markWarning
+)
+
+// mark is the colored status glyph of an activity line; the tool label after
+// it keeps the default foreground. paint drops colors for NO_COLOR.
+func (m shellModel) mark(kind markKind) string {
+	switch kind {
+	case markOK:
+		return m.paint("✓", "78") + " "
+	case markFailed:
+		return m.paint("✗", "203") + " "
+	case markWarning:
+		return m.paint("!", "214") + " "
+	}
+	return m.paint("◌", "245") + " "
 }

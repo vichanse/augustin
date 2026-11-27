@@ -103,7 +103,13 @@ func run(args []string, out, errOut io.Writer) int {
 				current.Events = diagnostic
 				executor := executorFor(w, mode, approvals)
 				tracker := verification.New(mode == tools.ExecuteWithApproval) // harness-owned, per turn
-				executor.Observe(tracker.Record)
+				executor.Observe(func(e tools.Evidence) {
+					tracker.Record(e)
+					// Display only: the shell shows a command's real exit status.
+					if display, ok := sink.(interface{ ToolEvidence(tools.Evidence) }); ok {
+						display.ToolEvidence(e)
+					}
+				})
 				current.Executor, current.Verification = executor, tracker
 				result, err := current.Run(ctx, codingRequest(messages, mode))
 				out := ui.TurnResult{Verification: result.Verification}

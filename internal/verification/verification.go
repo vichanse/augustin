@@ -32,6 +32,12 @@ var Command = []string{"go", "test", "./..."}
 
 const CommandText = "go test ./..."
 
+// CommandArguments are the run_command arguments of the harness-initiated run.
+const CommandArguments = `{"command":"go","args":["test","./..."]}`
+
+// HarnessRunNote follows the result of a harness-initiated test run.
+const HarnessRunNote = "The harness ran " + CommandText + " because you finished without a test run covering your last edit; the result is above. If it passed, give your final answer and report the actual result. If it failed, analyze the output and fix the problem with edit_file; the harness will run the tests again. If the user rejected the run, do not request it again."
+
 // Report is the harness verdict for one turn.
 type Report struct {
 	Status           Status
@@ -99,6 +105,16 @@ func (t *Tracker) MarkIncomplete(reason string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.incomplete = reason
+}
+
+// NeedsTestRun reports whether the harness should request the test run
+// itself: in execute mode, after an untested edit or an interrupted run.
+func (t *Tracker) NeedsTestRun() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	r := t.report()
+	interrupted := t.last != nil && t.last.revision == t.edits && t.last.interrupted()
+	return t.canExecute && (r.Status == Pending || (r.Status == Incomplete && interrupted))
 }
 
 // Continuation returns the instruction the loop gives the model when it tries

@@ -110,6 +110,44 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 	ctx, cancel := context.WithTimeout(ctx, b.Timeout)
 	defer cancel()
 	continuations := 0
+	// execute runs one tool call, from the model or from the harness, through
+	// the same events, display hook, executor and budgets.
+	execute := func(call model.ToolCall) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		toolName := safeToolName(call.Name)
+		emit(events.Event{Kind: events.ToolRequested, Tool: toolName})
+		// Display-only hook: it sees raw arguments, so sinks implementing it must not persist them.
+		if display, ok := l.Events.(interface{ ToolCall(model.ToolCall) }); ok {
+			display.ToolCall(call)
+		}
+		result.ToolCalls++
+		output, err := l.Executor.Execute(ctx, call)
+		if err != nil {
+			reason, recoverable := classifyToolError(err)
+			emit(events.Event{Kind: events.ToolFailed, Tool: toolName, Reason: reason, Recoverable: recoverable})
+			if !recoverable {
+				return fmt.Errorf("tool execution: %w", err)
+			}
+			output = "Tool error: " + string(reason)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if len(output) > b.MaxOutputBytes-result.OutputBytes {
+			emit(events.Event{Kind: events.ToolFailed, Tool: toolName, Reason: events.BudgetExceeded})
+			return fmt.Errorf("%w: tool output", ErrBudgetExceeded)
+		}
+		result.OutputBytes += len(output)
+		if err == nil {
+			emit(events.Event{Kind: events.ToolCompleted, Tool: toolName})
+		}
+		result.Messages = append(result.Messages, model.Message{
+			Role: model.RoleTool, Content: output, ToolCallID: call.ID,
+		})
+		return nil
+	}
 	allowed := make(map[string]bool, len(req.Tools))
 	for _, tool := range req.Tools {
 		allowed[tool.Name] = true
@@ -178,7 +216,19 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 		}
 		if finishing {
 			result.Messages = append(result.Messages, msg)
-			if instruction := l.verificationGate(ctx, result, final, b, &continuations); instruction != "" {
+			switch action, instruction := l.verificationGate(ctx, result, final, b, &continuations, allowed["run_command"]); action {
+			case gateRunTests:
+				// The harness, not the model, requests the test run. It still goes
+				// through the registry and the approval panel. A separate assistant
+				// message carries the call, so its result follows a tool call.
+				call := model.ToolCall{ID: fmt.Sprintf("augustin-verify-%d", continuations), Name: "run_command", Arguments: json.RawMessage(verification.CommandArguments)}
+				result.Messages = append(result.Messages, model.Message{Role: model.RoleAssistant, ToolCalls: []model.ToolCall{call}})
+				if err := execute(call); err != nil {
+					return result, err
+				}
+				result.Messages = append(result.Messages, model.Message{Role: model.RoleSystem, Content: verification.HarnessRunNote})
+				continue
+			case gateInstruct:
 				result.Messages = append(result.Messages, model.Message{Role: model.RoleSystem, Content: instruction})
 				continue
 			}
@@ -196,39 +246,9 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 		}
 		result.Messages = append(result.Messages, msg)
 		for _, call := range msg.ToolCalls {
-			if err := ctx.Err(); err != nil {
+			if err := execute(call); err != nil {
 				return result, err
 			}
-			toolName := safeToolName(call.Name)
-			emit(events.Event{Kind: events.ToolRequested, Tool: toolName})
-			// Display-only hook: it sees raw arguments, so sinks implementing it must not persist them.
-			if display, ok := l.Events.(interface{ ToolCall(model.ToolCall) }); ok {
-				display.ToolCall(call)
-			}
-			result.ToolCalls++
-			output, err := l.Executor.Execute(ctx, call)
-			if err != nil {
-				reason, recoverable := classifyToolError(err)
-				emit(events.Event{Kind: events.ToolFailed, Tool: toolName, Reason: reason, Recoverable: recoverable})
-				if !recoverable {
-					return result, fmt.Errorf("tool execution: %w", err)
-				}
-				output = "Tool error: " + string(reason)
-			}
-			if err := ctx.Err(); err != nil {
-				return result, err
-			}
-			if len(output) > b.MaxOutputBytes-result.OutputBytes {
-				emit(events.Event{Kind: events.ToolFailed, Tool: toolName, Reason: events.BudgetExceeded})
-				return result, fmt.Errorf("%w: tool output", ErrBudgetExceeded)
-			}
-			result.OutputBytes += len(output)
-			if err == nil {
-				emit(events.Event{Kind: events.ToolCompleted, Tool: toolName})
-			}
-			result.Messages = append(result.Messages, model.Message{
-				Role: model.RoleTool, Content: output, ToolCallID: call.ID,
-			})
 		}
 	}
 	return result, ErrIterationLimit
@@ -288,26 +308,43 @@ func classifyToolError(err error) (events.Reason, bool) {
 	}
 }
 
-// verificationGate decides whether a model that tries to finish is sent back
-// to obtain verification. It only continues while a non-final iteration and
-// a tool call remain for the test run plus a later answer, so the reserved
-// final response never gets tools. Otherwise it records why verification is
-// incomplete and lets the turn finish with the harness verdict.
-func (l Loop) verificationGate(ctx context.Context, result Result, final bool, b Budget, used *int) string {
+type gateAction int
+
+const (
+	gateFinish   gateAction = iota
+	gateInstruct            // tell the model what is missing (tests failed: fix and rerun)
+	gateRunTests            // the harness requests go test ./... itself
+)
+
+// verificationGate decides what happens when the model tries to finish.
+// When a test run is due (an edit not yet tested, or an interrupted run), the
+// harness requests it itself, so verification does not depend on the model
+// calling the tool; it needs a tool call and a later model call for the
+// synthesis. After failed tests the model is told to fix and rerun, which
+// needs a non-final iteration for the edit. Both share the continuation cap,
+// and the reserved final response never regains tools. Otherwise it records
+// why verification is incomplete and lets the turn finish.
+func (l Loop) verificationGate(ctx context.Context, result Result, final bool, b Budget, used *int, canRun bool) (gateAction, string) {
 	if l.Verification == nil {
-		return ""
+		return gateFinish, ""
 	}
-	instruction := l.Verification.Continuation()
+	run, instruction := l.Verification.NeedsTestRun(), l.Verification.Continuation()
+	room := ctx.Err() == nil && !final && result.ToolCalls < b.MaxToolCalls
 	switch {
-	case instruction == "":
-		return ""
+	case !run && instruction == "":
+		return gateFinish, ""
 	case *used >= maxVerificationContinuations:
 		l.Verification.MarkIncomplete("verification retries exhausted")
-	case final || result.Iterations > l.MaxIterations-2 || result.ToolCalls >= b.MaxToolCalls || ctx.Err() != nil:
-		l.Verification.MarkIncomplete("execution budget exhausted")
-	default:
+	case run && !canRun:
+		l.Verification.MarkIncomplete("the test command is not available in this turn")
+	case run && room && result.Iterations < l.MaxIterations:
 		*used++
-		return instruction
+		return gateRunTests, ""
+	case !run && room && result.Iterations <= l.MaxIterations-2:
+		*used++
+		return gateInstruct, instruction
+	default:
+		l.Verification.MarkIncomplete("execution budget exhausted")
 	}
-	return ""
+	return gateFinish, ""
 }

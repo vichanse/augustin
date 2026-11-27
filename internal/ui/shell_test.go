@@ -75,7 +75,7 @@ func TestLiveHarnessEvents(t *testing.T) {
 	next, _ = next.Update(liveEvent(events.Event{Kind: events.ModelCompleted, InputTokens: 10, OutputTokens: 5}))
 	next, _ = next.Update(liveEvent(events.Event{Kind: events.ToolFailed, Tool: "list_files", Reason: "directory_required", Recoverable: true}))
 	got := next.(shellModel)
-	if got.toolCalls != 1 || got.tokens != 15 || strings.Join(got.activity, "\n") != "! list_files (directory_required)" {
+	if got.toolCalls != 1 || got.tokens != 15 || strings.Join(got.activity, "\n") != "✗ list_files (directory_required)" {
 		t.Fatalf("unexpected telemetry: %+v", got.activity)
 	}
 }
