@@ -23,9 +23,10 @@ const (
 func (m shellModel) approvalKey(key tea.KeyMsg) shellModel {
 	switch key.String() {
 	case "up", "down", "left", "right", "tab", "shift+tab":
-		m.approvalChoice = choiceDeny
 		if m.previewComplete() {
 			m.approvalChoice = 1 - m.approvalChoice
+		} else {
+			m.approvalChoice = choiceDeny
 		}
 	case "enter":
 		return m.decide(m.approvalChoice == choiceApprove)
@@ -51,17 +52,22 @@ func (m shellModel) decide(approved bool) shellModel {
 	return m
 }
 
-// previewComplete reports whether the whole action fits the panel at the
-// current terminal size. Only a complete preview can be approved.
+// footerChrome is the mode line above the panel and the key hint below it.
+const footerChrome = 2
+
+// previewComplete reports whether the whole panel, with every line of the
+// action, fits the real terminal size. Only a complete preview can be approved.
 func (m shellModel) previewComplete() bool {
-	return m.approval != nil && !m.approval.Truncated &&
-		len(actionLines(m.approval.Action, m.actionWidth())) <= m.maxActionLines()
+	if m.approval == nil || m.approval.Truncated || m.actionWidth() < 1 {
+		return false // below one action column, lipgloss would rewrap action lines
+	}
+	panel := m.renderPanel(actionLines(m.approval.Action, m.actionWidth()), true)
+	return lipgloss.Width(panel) <= m.width && lipgloss.Height(panel)+footerChrome <= m.height
 }
 
-func (m shellModel) actionWidth() int { return max(16, m.width-10) }
-
-// maxActionLines keeps the panel within the screen; the inline renderer cannot draw above it.
-func (m shellModel) maxActionLines() int { return max(4, m.height-14) }
+// actionWidth is the panel content width (terminal minus border and padding)
+// minus the two-space action indent. It may be < 1 on tiny terminals.
+func (m shellModel) actionWidth() int { return m.width - 6 }
 
 // visible writes every rune that would not show as itself as a JSON \u
 // escape instead of dropping it. For the JSON actions the policy executes,
@@ -107,35 +113,43 @@ func actionLines(action string, width int) []string {
 }
 
 func (m shellModel) approvalPanel() string {
-	r := m.approval
-	w := max(24, m.width-2)
-	lines := actionLines(r.Action, m.actionWidth())
-	complete := m.previewComplete()
-	if len(lines) > m.maxActionLines() {
-		lines = lines[:m.maxActionLines()]
+	lines := actionLines(m.approval.Action, max(1, m.actionWidth()))
+	if m.previewComplete() {
+		return m.renderPanel(lines, true)
 	}
-	action := "  " + strings.Join(lines, "\n  ")
+	// Show as much as fits; approval stays disabled anyway.
+	keep := max(0, m.height-footerChrome-lipgloss.Height(m.renderPanel(nil, false)))
+	return m.renderPanel(lines[:min(len(lines), keep)], false)
+}
+
+func (m shellModel) renderPanel(lines []string, complete bool) string {
+	r := m.approval
+	parts := []string{
+		m.paint("Approval required", "214"),
+		"Capability: " + visible(string(r.Capability)),
+		"Tool: " + visible(r.Tool),
+		"Action:",
+	}
+	for _, l := range lines {
+		parts = append(parts, "  "+l)
+	}
 	approve := "Approve once"
 	if !complete {
 		reason := "does not fit the terminal"
 		if r.Truncated {
-			reason = "exceeds the 4 KiB preview limit"
+			reason = "exceeds the preview size limit"
 		}
-		action += "\n" + m.paint("⚠ Preview incomplete: action "+reason+". Approval disabled.", "214")
+		parts = append(parts, m.paint("⚠ Preview incomplete: action "+reason+". Approval disabled.", "214"))
 		approve = m.paint("Approve once (unavailable)", "245")
 	}
-	options := []string{approve, "Deny"}
-	for i := range options {
+	parts = append(parts, "")
+	for i, option := range []string{approve, "Deny"} {
+		prefix := "  "
 		if i == m.approvalChoice {
-			options[i] = m.paint("❯ ", "99") + options[i]
-		} else {
-			options[i] = "  " + options[i]
+			prefix = m.paint("❯ ", "99")
 		}
+		parts = append(parts, prefix+option)
 	}
-	body := m.paint("Approval required", "214") +
-		"\nCapability: " + visible(string(r.Capability)) +
-		"\nTool: " + visible(r.Tool) +
-		"\nAction:\n" + action +
-		"\n\n" + strings.Join(options, "\n")
-	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(w - 2).Render(body)
+	// Width counts padding but not the border: the panel spans exactly m.width.
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(max(1, m.width-2)).Render(strings.Join(parts, "\n"))
 }

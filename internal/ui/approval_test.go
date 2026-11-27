@@ -194,7 +194,7 @@ func TestBrokerTruncatedActionCannotBeApproved(t *testing.T) {
 	if !m.approval.Truncated || m.previewComplete() {
 		t.Fatal("broker truncation not detected")
 	}
-	if !strings.Contains(m.approvalPanel(), "exceeds the 4 KiB preview limit") {
+	if !strings.Contains(m.approvalPanel(), "exceeds the preview size limit") {
 		t.Fatal("truncation not explained")
 	}
 	next := press(m, down, tea.KeyMsg{Type: tea.KeyUp}, tea.KeyMsg{Type: tea.KeyTab})
@@ -331,6 +331,95 @@ func TestVisibleActionDecodesToTheExecutedValue(t *testing.T) {
 		}
 		if strings.ContainsAny(shown, "\u200b\u202e\u00a0") || strings.Contains(shown, "\U000e0041") {
 			t.Fatalf("invisible character shown raw: %q", shown)
+		}
+	}
+}
+
+func TestApprovalNavigationIsBidirectional(t *testing.T) {
+	m, ch := pendingShell(t, `{"path":"a.txt"}`)
+	up := tea.KeyMsg{Type: tea.KeyUp}
+	steps := []struct {
+		key  tea.KeyMsg
+		want int
+	}{{down, choiceApprove}, {down, choiceDeny}, {up, choiceApprove}, {up, choiceDeny}, {tea.KeyMsg{Type: tea.KeyTab}, choiceApprove}, {tea.KeyMsg{Type: tea.KeyShiftTab}, choiceDeny}}
+	var next tea.Model = m
+	for i, step := range steps {
+		next = press(next, step.key)
+		if got := next.(shellModel).approvalChoice; got != step.want {
+			t.Fatalf("step %d (%s): choice %d, want %d", i, step.key, got, step.want)
+		}
+	}
+	press(next, enter) // back on Deny
+	if d := outcome(t, ch); d.ok || d.err != nil {
+		t.Fatalf("Deny → Approve → Deny then Enter must deny: %+v", d)
+	}
+}
+
+// fitShell is a busy shell with activity, so the live area competes for space.
+func fitShell(t *testing.T, width, height int) shellModel {
+	t.Helper()
+	m, _ := pendingShell(t, `{"path":"internal/agent/loop.go","content":"`+strings.Repeat("abc ", 40)+`"}`)
+	m.submitted, m.status = "edit the loop", "Working…"
+	m.activity = []string{"✓ Read(internal/agent/loop.go)", "◌ fake_write"}
+	next, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	return next.(shellModel)
+}
+
+func TestApprovalExactHeightBoundary(t *testing.T) {
+	const width = 60
+	h := 1
+	for ; h <= 200 && !fitShell(t, width, h).previewComplete(); h++ {
+	}
+	if h > 200 {
+		t.Fatal("never fits")
+	}
+	m := fitShell(t, width, h)
+	if got := lipgloss.Height(m.approvalPanel()) + footerChrome; got != h {
+		t.Fatalf("boundary at %d rows but panel needs %d", h, got)
+	}
+	if fitShell(t, width, h-1).previewComplete() {
+		t.Fatal("one row short still approvable")
+	}
+	view := m.View()
+	if lipgloss.Height(view) > h || lipgloss.Width(view) > width {
+		t.Fatalf("view %dx%d exceeds terminal %dx%d", lipgloss.Width(view), lipgloss.Height(view), width, h)
+	}
+	for _, line := range actionLines(m.approval.Action, m.actionWidth()) {
+		if !strings.Contains(view, line) {
+			t.Fatalf("action line missing from a complete view: %q", line)
+		}
+	}
+	if !strings.Contains(view, "Approve once") || strings.Contains(view, "unavailable") || !strings.Contains(view, "Esc deny") {
+		t.Fatal("panel options or key hint cut at the boundary")
+	}
+}
+
+func TestApprovalExactWidthBoundary(t *testing.T) {
+	const height = 40
+	w := 1
+	for ; w <= 300 && !fitShell(t, w, height).previewComplete(); w++ {
+	}
+	if w > 300 {
+		t.Fatal("never fits")
+	}
+	if fitShell(t, w-1, height).previewComplete() {
+		t.Fatal("one column short still approvable")
+	}
+	m := fitShell(t, w, height)
+	if view := m.View(); lipgloss.Width(m.approvalPanel()) > w || lipgloss.Height(view) > height {
+		t.Fatalf("panel %d wide in %d columns", lipgloss.Width(m.approvalPanel()), w)
+	}
+}
+
+func TestTinyTerminalsDisableApproval(t *testing.T) {
+	for _, size := range [][2]int{{0, 0}, {1, 1}, {6, 100}, {7, 100}, {100, 1}, {100, footerChrome}, {12, 12}} {
+		m := fitShell(t, size[0], size[1])
+		if m.previewComplete() {
+			t.Errorf("%dx%d: approval enabled on a terminal that cannot show the panel", size[0], size[1])
+		}
+		_ = m.View() // must not panic
+		if got := press(m, down).(shellModel).approvalChoice; got != choiceDeny {
+			t.Errorf("%dx%d: navigation reached Approve", size[0], size[1])
 		}
 	}
 }

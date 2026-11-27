@@ -38,7 +38,7 @@ type Request struct {
 	Capability tools.Capability
 	Tool       string
 	Action     string // compact JSON arguments, bounded
-	Truncated  bool   // Action is incomplete: the request can only be denied
+	Truncated  bool   // Tool or Action is incomplete: the request can only be denied
 }
 
 // Update tells the UI that a request opened, or closed without a decision
@@ -176,9 +176,9 @@ func snapshot(id uint64, capability tools.Capability, call model.ToolCall) Reque
 	if json.Compact(&compact, call.Arguments) == nil {
 		action = compact.String()
 	}
-	tool, _ := bound(call.Name, maxToolBytes)
-	action, truncated := bound(action, maxActionBytes)
-	return Request{ID: id, Capability: capability, Tool: tool, Action: action, Truncated: truncated}
+	tool, toolCut := bound(call.Name, maxToolBytes)
+	action, actionCut := bound(action, maxActionBytes)
+	return Request{ID: id, Capability: capability, Tool: tool, Action: action, Truncated: toolCut || actionCut}
 }
 
 // bound cuts s to at most n bytes on a rune boundary.

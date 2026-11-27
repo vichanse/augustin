@@ -384,11 +384,20 @@ func (m shellModel) userLine(prompt string) string {
 func (m shellModel) View() string {
 	w := max(1, m.width)
 	rule := m.paint(strings.Repeat("─", w), "240")
-	input := []string{rule, m.composer.View(), m.commandMenu(), rule}
+	mode := m.paint("● READ ONLY", "78") + " · Workspace trusted"
 	if m.approval != nil {
-		input = []string{m.approvalPanel()}
+		// The panel must stay whole: crop the live area from the top to make room.
+		footer := strings.Join([]string{mode, m.approvalPanel(), m.keyHint()}, "\n")
+		live := strings.Split(strings.TrimSuffix(m.liveArea(), "\n"), "\n")
+		keep := max(0, m.height-lipgloss.Height(footer))
+		top := ""
+		if keep > 0 && live[0] != "" {
+			top = strings.Join(live[max(0, len(live)-keep):], "\n") + "\n"
+		}
+		return lipgloss.NewStyle().MaxWidth(w).Render(top + footer)
 	}
-	footer := strings.Join(append(append([]string{m.paint("● READ ONLY", "78") + " · Workspace trusted"}, input...), m.keyHint()), "\n")
+	input := []string{rule, m.composer.View(), m.commandMenu(), rule}
+	footer := strings.Join(append(append([]string{mode}, input...), m.keyHint()), "\n")
 	footer = strings.ReplaceAll(footer, "\n\n", "\n")
 	return lipgloss.NewStyle().MaxWidth(w).Render(m.liveArea() + footer)
 }

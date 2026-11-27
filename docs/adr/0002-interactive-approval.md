@@ -21,8 +21,8 @@ Future edit and execute tools need a human decision per action. The policy in `i
 
 Approval means approving the exact action, so the user must be able to see all of it:
 
-- The broker bounds the snapshot to 4 KiB and marks it `Truncated`. `Resolve(id, true)` on a truncated request is refused and the request stays pending: it can only be denied, whatever the UI does.
-- The shell also requires the whole action to fit the panel at the current terminal size (width-based hard wrapping, at most `height − 14` lines). This is re-checked in the decision path on every Enter, not only when drawing. Arrow keys cannot select Approve on an incomplete preview, a resize that makes it incomplete moves the selection back to Deny, and a resize that makes it complete never selects Approve.
+- The broker bounds the tool name to 64 bytes and the arguments to 4 KiB, and marks the request `Truncated` if either was cut. `Resolve(id, true)` on a truncated request is refused and the request stays pending: it can only be denied, whatever the UI does.
+- The shell also requires the complete panel (border, labels, every action line, options) plus the mode line and the key hint to fit the actual terminal size. It renders the panel and measures it; there are no assumed minimum dimensions. While an approval is pending, the live area above the panel is cropped from the top so it never pushes the panel off screen. This is re-checked in the decision path on every Enter, not only when drawing. On an incomplete preview, arrow keys keep Deny selected; on a complete one they toggle between Deny and Approve. A resize that makes the preview incomplete moves the selection back to Deny, and a resize that makes it complete never selects Approve.
 - The panel says why approval is disabled (size limit or terminal size).
 
 The preview must not hide details either:

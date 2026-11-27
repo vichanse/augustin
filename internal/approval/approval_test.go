@@ -316,3 +316,19 @@ func TestRejectionMemoryIgnoresInsignificantWhitespace(t *testing.T) {
 	waitPending(t, b)
 	b.Close()
 }
+
+func TestTruncatedToolNameCanOnlyBeDenied(t *testing.T) {
+	b, _ := newBroker()
+	go b.Approve(context.Background(), tools.Edit, model.ToolCall{Name: strings.Repeat("t", 100), Arguments: json.RawMessage(`{}`)})
+	req := waitPending(t, b)
+	if !req.Truncated || len(req.Tool) > 64 {
+		t.Fatalf("cut tool name not flagged: truncated=%v len=%d", req.Truncated, len(req.Tool))
+	}
+	if b.Resolve(req.ID, true) {
+		t.Fatal("broker approved an incomplete tool identity")
+	}
+	if !b.Resolve(req.ID, false) {
+		t.Fatal("deny refused")
+	}
+	b.Close()
+}
