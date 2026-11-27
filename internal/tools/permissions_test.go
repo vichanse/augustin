@@ -27,7 +27,7 @@ func TestCapabilityApproval(t *testing.T) {
 		r := NewWithPolicy(map[string]Handler{"edit": func(context.Context, model.ToolCall) (string, error) {
 			called = true
 			return "ok", nil
-		}}, []string{"edit"}, Policy{Mode: tc.mode, Capabilities: map[string]Capability{"edit": Edit}, Approve: func(context.Context, Capability, model.ToolCall) (bool, error) {
+		}}, []string{"edit"}, Policy{Mode: tc.mode, Capabilities: map[string]Capability{"edit": Edit}, Approve: func(context.Context, Proposal) (bool, error) {
 			return tc.approve, nil
 		}})
 		_, err := r.Execute(ctx, call)
@@ -54,7 +54,7 @@ func TestSensitiveActionsDeniedWithoutAskingTheUser(t *testing.T) {
 		r := NewWithPolicy(map[string]Handler{"tool": func(context.Context, model.ToolCall) (string, error) {
 			ran = true
 			return "", nil
-		}}, []string{"tool"}, Policy{Mode: tc.mode, Capabilities: map[string]Capability{"tool": tc.capability}, Approve: func(context.Context, Capability, model.ToolCall) (bool, error) {
+		}}, []string{"tool"}, Policy{Mode: tc.mode, Capabilities: map[string]Capability{"tool": tc.capability}, Approve: func(context.Context, Proposal) (bool, error) {
 			asked = true
 			return true, nil
 		}})
@@ -70,8 +70,8 @@ func TestUserRejectionIsDistinctFromPolicyDenial(t *testing.T) {
 	r := NewWithPolicy(map[string]Handler{"edit": func(context.Context, model.ToolCall) (string, error) {
 		t.Fatal("rejected action executed")
 		return "", nil
-	}}, []string{"edit"}, Policy{Mode: EditWithApproval, Capabilities: map[string]Capability{"edit": Edit}, Approve: func(_ context.Context, c Capability, _ model.ToolCall) (bool, error) {
-		gotCapability = c
+	}}, []string{"edit"}, Policy{Mode: EditWithApproval, Capabilities: map[string]Capability{"edit": Edit}, Approve: func(_ context.Context, p Proposal) (bool, error) {
+		gotCapability = p.Capability
 		return false, nil
 	}})
 	_, err := r.Execute(context.Background(), model.ToolCall{Name: "edit"})
@@ -84,7 +84,7 @@ func TestApproverWithoutDecisionFailsClosed(t *testing.T) {
 	r := NewWithPolicy(map[string]Handler{"edit": func(context.Context, model.ToolCall) (string, error) {
 		t.Fatal("undecided action executed")
 		return "", nil
-	}}, []string{"edit"}, Policy{Mode: EditWithApproval, Capabilities: map[string]Capability{"edit": Edit}, Approve: func(context.Context, Capability, model.ToolCall) (bool, error) {
+	}}, []string{"edit"}, Policy{Mode: EditWithApproval, Capabilities: map[string]Capability{"edit": Edit}, Approve: func(context.Context, Proposal) (bool, error) {
 		return true, errors.New("ui closed") // an error wins even with true
 	}})
 	if _, err := r.Execute(context.Background(), model.ToolCall{Name: "edit"}); err == nil || errors.Is(err, ErrRejected) {

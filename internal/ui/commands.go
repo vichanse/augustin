@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/vichanse/augustin/internal/tools"
 	"github.com/vichanse/augustin/internal/version"
 )
 
@@ -17,6 +18,7 @@ var slashCommands = []slashCommand{
 	{"/help", "Show available commands"},
 	{"/clear", "Clear conversation"},
 	{"/status", "Show last turn statistics"},
+	{"/mode", "Switch mode: /mode read-only | /mode edit"},
 	{"/model", "Show active model"},
 	{"/version", "Show installed version"},
 	{"/tools", "List available tools"},
@@ -86,17 +88,26 @@ func (m shellModel) runCommand(command string) (tea.Model, tea.Cmd) {
 		m.tokens, m.toolCalls, m.elapsed = 0, 0, 0
 		m.commandNotice = "Conversation cleared."
 	case "/status":
-		m.commandNotice = fmt.Sprintf("READ ONLY · Last turn: %d tools · %d tokens · %s", m.toolCalls, m.tokens, m.elapsed)
+		m.commandNotice = fmt.Sprintf("%s · Last turn: %d tools · %d tokens · %s", modeName(m.mode), m.toolCalls, m.tokens, m.elapsed)
 	case "/version":
 		m.commandNotice = "Augustin Code " + version.Current()
 	case "/model":
 		m.commandNotice = SafeText(m.provider) + " · " + SafeText(m.model)
+	case "/mode":
+		m.commandNotice = m.switchMode(command)
 	case "/tools":
 		m.commandNotice = "Read-only tools: workspace_overview, list_files, read_file"
+		if m.mode == tools.EditWithApproval {
+			m.commandNotice += "\nEdit tools: edit_file (exact replacement, approval required per change)"
+		}
 	case "/permissions":
-		m.commandNotice = "Mode: READ ONLY\nRead: allowed for registered tools\nEdit: denied\nExecute: denied\nWorkspace trust does not grant additional capabilities."
+		edit := "denied (use /mode edit)"
+		if m.mode == tools.EditWithApproval {
+			edit = "edit_file only, explicit approval for every change"
+		}
+		m.commandNotice = "Mode: " + modeName(m.mode) + "\nRead: allowed for registered tools\nEdit: " + edit + "\nExecute: denied\nWorkspace trust does not grant additional capabilities."
 	case "/trust":
-		m.commandNotice = "Trusted workspace: " + SafeText(m.path) + "\nEditing and command execution disabled."
+		m.commandNotice = "Trusted workspace: " + SafeText(m.path) + "\nTrust does not grant editing; command execution is disabled."
 	case "/sessions", "/resume", "/rename", "/delete":
 		m.sessionCommand(command)
 	case "/exit":
@@ -105,4 +116,30 @@ func (m shellModel) runCommand(command string) (tea.Model, tea.Cmd) {
 		m.commandNotice = "Unknown command. Type /help."
 	}
 	return m, nil
+}
+
+func modeName(mode tools.Mode) string {
+	if mode == tools.EditWithApproval {
+		return "EDIT"
+	}
+	return "READ ONLY"
+}
+
+// switchMode is a local user command. The model has no way to call it, and it
+// is refused while a turn runs or an approval is pending.
+func (m *shellModel) switchMode(command string) string {
+	if m.busy || m.approval != nil {
+		return "Cannot change mode during a turn or a pending approval."
+	}
+	_, arg, _ := strings.Cut(command, " ")
+	switch strings.TrimSpace(arg) {
+	case "read-only":
+		m.mode = tools.ReadOnly
+		return "Mode: READ ONLY. Editing disabled."
+	case "edit":
+		m.mode = tools.EditWithApproval
+		return "Mode: EDIT. Augustin may propose exact replacements with edit_file; each change is shown as a diff and applied only if you approve it. Commands still cannot run."
+	default:
+		return "Mode: " + modeName(m.mode) + "\nUsage: /mode read-only | /mode edit"
+	}
 }

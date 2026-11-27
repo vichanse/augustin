@@ -61,7 +61,7 @@ func (m shellModel) previewComplete() bool {
 	if m.approval == nil || m.approval.Truncated || m.actionWidth() < 1 {
 		return false // below one action column, lipgloss would rewrap action lines
 	}
-	panel := m.renderPanel(actionLines(m.approval.Action, m.actionWidth()), true)
+	panel := m.renderPanel(m.previewLines(m.actionWidth()), true)
 	return lipgloss.Width(panel) <= m.width && lipgloss.Height(panel)+footerChrome <= m.height
 }
 
@@ -93,13 +93,70 @@ func visible(s string) string {
 	return b.String()
 }
 
-// actionLines hard-wraps by display width without dropping any character
-// (word wrapping may swallow spaces at break points).
+// visibleDiff makes file text unambiguous without hiding anything: a tab is
+// "→" plus padding, any other non-printing rune is ⟨U+XXXX⟩, and the marker
+// runes themselves are escaped, so every rendering maps back to one text.
+func visibleDiff(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && size == 1:
+			fmt.Fprintf(&b, "⟨0x%02X⟩", s[i])
+		case r == '\t':
+			b.WriteString("→   ")
+		case r == '→' || r == '⟨':
+			fmt.Fprintf(&b, "⟨U+%04X⟩", r)
+		case r == ' ' || strconv.IsPrint(r):
+			b.WriteRune(r)
+		default:
+			fmt.Fprintf(&b, "⟨U+%04X⟩", r)
+		}
+		i += size
+	}
+	return b.String()
+}
+
+// previewLines is the action or diff exactly as the panel shows it.
+func (m shellModel) previewLines(width int) []string {
+	if m.approval.Diff == "" {
+		return actionLines(m.approval.Action, width)
+	}
+	var lines []string
+	for _, l := range strings.Split(m.approval.Diff, "\n") {
+		color := ""
+		switch {
+		case strings.HasPrefix(l, "+++"), strings.HasPrefix(l, "---"):
+			color = "245"
+		case strings.HasPrefix(l, "@@"):
+			color = "39"
+		case strings.HasPrefix(l, "+"):
+			color = "78"
+		case strings.HasPrefix(l, "-"):
+			color = "203"
+		}
+		for _, chunk := range wrapRunes(visibleDiff(l), width) {
+			if color != "" {
+				chunk = m.paint(chunk, color)
+			}
+			lines = append(lines, chunk)
+		}
+	}
+	return lines
+}
+
+// actionLines hard-wraps the JSON action without dropping any character.
 func actionLines(action string, width int) []string {
+	return wrapRunes(visible(action), width)
+}
+
+// wrapRunes hard-wraps by display width without dropping any character
+// (word wrapping may swallow spaces at break points).
+func wrapRunes(text string, width int) []string {
 	var lines []string
 	var line strings.Builder
 	used := 0
-	for _, r := range visible(action) {
+	for _, r := range text {
 		w := lipgloss.Width(string(r))
 		if used+w > width && used > 0 {
 			lines = append(lines, line.String())
@@ -113,7 +170,7 @@ func actionLines(action string, width int) []string {
 }
 
 func (m shellModel) approvalPanel() string {
-	lines := actionLines(m.approval.Action, max(1, m.actionWidth()))
+	lines := m.previewLines(max(1, m.actionWidth()))
 	if m.previewComplete() {
 		return m.renderPanel(lines, true)
 	}
@@ -128,7 +185,11 @@ func (m shellModel) renderPanel(lines []string, complete bool) string {
 		m.paint("Approval required", "214"),
 		"Capability: " + visible(string(r.Capability)),
 		"Tool: " + visible(r.Tool),
-		"Action:",
+	}
+	if r.Diff != "" {
+		parts = append(parts, "Path: "+visibleDiff(r.Path), "Diff:")
+	} else {
+		parts = append(parts, "Action:")
 	}
 	for _, l := range lines {
 		parts = append(parts, "  "+l)

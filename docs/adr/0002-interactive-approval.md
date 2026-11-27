@@ -37,7 +37,7 @@ The approval waits on the turn context. Waiting counts against the turn budget (
 
 ## Consequences
 
-- The production CLI remains read-only: `ReadPolicy` never asks for approval. The approval path is exercised by tests with a fake `fake_write` tool that is never offered to a real model.
+- At the time of this decision the production CLI was read-only. ADR 0003 adds `edit_file` in interactive edit mode; its approvals go through this broker with the prepared diff in `Request.Diff`.
 - A slow decision can consume most of the turn budget. Pausing the deadline during approval is deliberately deferred until real edit tools exist and their budgets are known.
 - Large actions (over 4 KiB, or taller than the terminal) cannot be approved in this design. Future edit tools will need a paged or diff-based preview before they can propose large changes.
 - Visually confusable but distinct printable characters (homoglyphs such as Latin `a` and Cyrillic `а`) are shown as themselves. They are visible, but a user may not notice the difference.

@@ -15,7 +15,6 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"github.com/vichanse/augustin/internal/model"
 	"github.com/vichanse/augustin/internal/tools"
 )
 
@@ -29,6 +28,8 @@ var (
 const (
 	maxToolBytes   = 64
 	maxActionBytes = 4096
+	maxPathBytes   = 1024
+	maxDiffBytes   = 4096 // tools rejects larger diffs; this is defense in depth
 )
 
 // Request is an immutable snapshot of one proposed action. Its text fields
@@ -38,7 +39,9 @@ type Request struct {
 	Capability tools.Capability
 	Tool       string
 	Action     string // compact JSON arguments, bounded
-	Truncated  bool   // Tool or Action is incomplete: the request can only be denied
+	Path       string // target of a prepared edit, if any
+	Diff       string // unified diff of a prepared edit; shown instead of Action
+	Truncated  bool   // a field is incomplete: the request can only be denied
 }
 
 // Update tells the UI that a request opened, or closed without a decision
@@ -77,11 +80,11 @@ func (b *Broker) Attach(notify func(Update)) {
 
 // Approve implements tools.Approver. It returns (true, nil) only for an
 // explicit approval of this exact request.
-func (b *Broker) Approve(ctx context.Context, capability tools.Capability, call model.ToolCall) (bool, error) {
+func (b *Broker) Approve(ctx context.Context, proposal tools.Proposal) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	key := fingerprint(capability, call)
+	key := fingerprint(proposal)
 	b.mu.Lock()
 	switch {
 	case b.closed || b.notify == nil:
@@ -96,7 +99,7 @@ func (b *Broker) Approve(ctx context.Context, capability tools.Capability, call 
 		return false, ErrBusy
 	}
 	b.nextID++
-	p := &pending{req: snapshot(b.nextID, capability, call), key: key, reply: make(chan bool, 1)}
+	p := &pending{req: snapshot(b.nextID, proposal), key: key, reply: make(chan bool, 1)}
 	b.current = p
 	notify := b.notify
 	b.mu.Unlock()
@@ -170,15 +173,18 @@ func (b *Broker) withdraw(p *pending) {
 	}
 }
 
-func snapshot(id uint64, capability tools.Capability, call model.ToolCall) Request {
-	action := string(call.Arguments)
+func snapshot(id uint64, p tools.Proposal) Request {
+	action := string(p.Call.Arguments)
 	var compact bytes.Buffer
-	if json.Compact(&compact, call.Arguments) == nil {
+	if json.Compact(&compact, p.Call.Arguments) == nil {
 		action = compact.String()
 	}
-	tool, toolCut := bound(call.Name, maxToolBytes)
+	tool, toolCut := bound(p.Call.Name, maxToolBytes)
 	action, actionCut := bound(action, maxActionBytes)
-	return Request{ID: id, Capability: capability, Tool: tool, Action: action, Truncated: toolCut || actionCut}
+	path, pathCut := bound(p.Path, maxPathBytes)
+	diff, diffCut := bound(p.Diff, maxDiffBytes)
+	return Request{ID: id, Capability: p.Capability, Tool: tool, Action: action, Path: path, Diff: diff,
+		Truncated: toolCut || actionCut || pathCut || diffCut}
 }
 
 // bound cuts s to at most n bytes on a rune boundary.
@@ -195,14 +201,15 @@ func bound(s string, n int) (string, bool) {
 // fingerprint identifies an action for rejection memory only. Compaction
 // removes whitespace outside strings, so it can only widen what counts as
 // already refused; it never changes what executes.
-func fingerprint(capability tools.Capability, call model.ToolCall) [32]byte {
-	args := call.Arguments
+// The diff is included so the same arguments against changed content ask again.
+func fingerprint(p tools.Proposal) [32]byte {
+	args := p.Call.Arguments
 	var compact bytes.Buffer
 	if json.Compact(&compact, args) == nil {
 		args = compact.Bytes()
 	}
 	h := sha256.New()
-	for _, part := range [][]byte{[]byte(capability), []byte(call.Name), args} {
+	for _, part := range [][]byte{[]byte(p.Capability), []byte(p.Call.Name), args, []byte(p.Path), []byte(p.Diff)} {
 		h.Write([]byte{byte(len(part) >> 24), byte(len(part) >> 16), byte(len(part) >> 8), byte(len(part))})
 		h.Write(part)
 	}

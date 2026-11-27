@@ -66,6 +66,11 @@ func pathArgument(call model.ToolCall) (string, error) {
 	if path == "" && call.Name == "list_files" {
 		path = "."
 	}
+	return localPath(path)
+}
+
+// localPath accepts workspace-relative paths only: no absolute paths or traversal.
+func localPath(path string) (string, error) {
 	if !filepath.IsLocal(path) {
 		return "", ErrInvalidArguments
 	}
@@ -82,36 +87,46 @@ func (w *Workspace) readFile(ctx context.Context, call model.ToolCall) (string, 
 	if err != nil {
 		return "", err
 	}
-	info, err := w.checkedStat(path)
+	data, _, err := w.readRegular(ctx, path)
 	if err != nil {
 		return "", err
 	}
+	return string(data), ctx.Err()
+}
+
+// readRegular reads a permitted regular file: no sensitive names, no symlink
+// components, at most maxFileBytes. The FileInfo comes from the open file.
+func (w *Workspace) readRegular(ctx context.Context, path string) ([]byte, fs.FileInfo, error) {
+	info, err := w.checkedStat(path)
+	if err != nil {
+		return nil, nil, err
+	}
 	if !info.Mode().IsRegular() {
-		return "", ErrRegularFileRequired
+		return nil, nil, ErrRegularFileRequired
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return nil, nil, err
 	}
 	f, err := w.root.Open(path)
 	if err != nil {
-		return "", err
+		return nil, nil, err
 	}
 	defer f.Close()
 	info, err = f.Stat()
 	if err != nil {
-		return "", err
+		return nil, nil, err
 	}
 	if !info.Mode().IsRegular() {
-		return "", ErrRegularFileRequired
+		return nil, nil, ErrRegularFileRequired
 	}
 	data, err := io.ReadAll(io.LimitReader(f, maxFileBytes+1))
 	if err != nil {
-		return "", err
+		return nil, nil, err
 	}
 	if len(data) > maxFileBytes {
-		return "", ErrFileTooLarge
+		return nil, nil, ErrFileTooLarge
 	}
-	return string(data), ctx.Err()
+	return data, info, nil
 }
 
 func (w *Workspace) listFiles(ctx context.Context, call model.ToolCall) (string, error) {

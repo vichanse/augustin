@@ -12,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/vichanse/augustin/internal/approval"
 	"github.com/vichanse/augustin/internal/events"
@@ -34,7 +35,7 @@ func pendingShell(t *testing.T, args string) (shellModel, <-chan decision) {
 	t.Cleanup(b.Close)
 	out := make(chan decision, 1)
 	go func() {
-		ok, err := b.Approve(context.Background(), tools.Edit, model.ToolCall{Name: "fake_write", Arguments: json.RawMessage(args)})
+		ok, err := b.Approve(context.Background(), tools.Proposal{Capability: tools.Edit, Call: model.ToolCall{Name: "fake_write", Arguments: json.RawMessage(args)}})
 		out <- decision{ok, err}
 	}()
 	m := newShellModel("/workspace", "openai", "test", false)
@@ -103,7 +104,7 @@ func TestApprovalApproveOnceAndEscapeDenies(t *testing.T) {
 func TestApprovalBlocksPromptsAndCommands(t *testing.T) {
 	m, ch := pendingShell(t, `{}`)
 	m.busy = false // even an idle shell must not submit while a decision is pending
-	m.turn = func(context.Context, []model.Message, string, events.Sink) (string, error) {
+	m.turn = func(context.Context, []model.Message, string, tools.Mode, events.Sink) (string, error) {
 		t.Fatal("prompt submitted during approval")
 		return "", nil
 	}
@@ -273,9 +274,9 @@ func TestClosingShellReleasesPendingApproval(t *testing.T) {
 	in, keys := io.Pipe()
 	defer keys.Close()
 	released := make(chan error, 1)
-	turn := func(context.Context, []model.Message, string, events.Sink) (string, error) {
+	turn := func(context.Context, []model.Message, string, tools.Mode, events.Sink) (string, error) {
 		// Background, not the turn context: only closing the shell may release it.
-		_, err := b.Approve(context.Background(), tools.Edit, model.ToolCall{Name: "fake_write", Arguments: json.RawMessage(`{}`)})
+		_, err := b.Approve(context.Background(), tools.Proposal{Capability: tools.Edit, Call: model.ToolCall{Name: "fake_write", Arguments: json.RawMessage(`{}`)}})
 		released <- err
 		return "", err
 	}
@@ -421,5 +422,96 @@ func TestTinyTerminalsDisableApproval(t *testing.T) {
 		if got := press(m, down).(shellModel).approvalChoice; got != choiceDeny {
 			t.Errorf("%dx%d: navigation reached Approve", size[0], size[1])
 		}
+	}
+}
+
+const sampleDiff = "--- a/discount.go\n+++ b/discount.go\n@@ -1,3 +1,3 @@\n func CalculateDiscount(price, discount float64) float64 {\n-\treturn price + discount\n+\treturn price - discount\n }"
+
+func editShell(t *testing.T, diff string) (shellModel, <-chan decision) {
+	t.Helper()
+	b := approval.New()
+	updates := make(chan approval.Update, 4)
+	b.Attach(func(u approval.Update) { updates <- u })
+	t.Cleanup(b.Close)
+	out := make(chan decision, 1)
+	go func() {
+		ok, err := b.Approve(context.Background(), tools.Proposal{Capability: tools.Edit, Call: model.ToolCall{Name: "edit_file", Arguments: json.RawMessage(`{"path":"discount.go","old_string":"+","new_string":"-"}`)}, Path: "discount.go", Diff: diff})
+		out <- decision{ok, err}
+	}()
+	m := newShellModel("/workspace", "openai", "test", false)
+	m.approvals, m.busy, m.mode = b, true, tools.EditWithApproval
+	next, _ := m.Update(approvalUpdate(<-updates))
+	return next.(shellModel), out
+}
+
+func TestApprovalPanelShowsDiff(t *testing.T) {
+	m, ch := editShell(t, sampleDiff)
+	view := m.View()
+	for _, want := range []string{"Path: discount.go", "Diff:", "--- a/discount.go", "-→   return price + discount", "+→   return price - discount", "❯ Deny", "● EDIT"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("diff panel missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, `"old_string"`) {
+		t.Fatal("raw JSON shown instead of the diff")
+	}
+	if !m.previewComplete() {
+		t.Fatal("small diff should be approvable")
+	}
+	press(m, down, enter)
+	if d := outcome(t, ch); !d.ok {
+		t.Fatalf("diff approval: %+v", d)
+	}
+}
+
+func TestDiffPanelColorsLines(t *testing.T) {
+	previous := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256) // tests do not run in a color terminal
+	t.Cleanup(func() { lipgloss.SetColorProfile(previous) })
+	m, _ := editShell(t, sampleDiff)
+	m.color = true
+	panel := m.approvalPanel()
+	red, green := m.paint("-→   return price + discount", "203"), m.paint("+→   return price - discount", "78")
+	if !strings.Contains(panel, red) || !strings.Contains(panel, green) {
+		t.Fatal("removed/added lines not styled red/green")
+	}
+}
+
+func TestIncompleteDiffCannotBeApproved(t *testing.T) {
+	m, ch := editShell(t, sampleDiff+strings.Repeat("\n+added line", 40))
+	if m.previewComplete() {
+		t.Fatal("a 40-line diff fits a 24-row terminal")
+	}
+	forced := m
+	forced.approvalChoice = choiceApprove
+	if press(forced, enter).(shellModel).approval == nil {
+		t.Fatal("incomplete diff approved")
+	}
+	if !strings.Contains(m.View(), "does not fit") {
+		t.Fatal("reason not shown")
+	}
+	press(m, esc)
+	if d := outcome(t, ch); d.ok {
+		t.Fatal("incomplete diff approved")
+	}
+}
+
+func TestVisibleDiffIsUnambiguous(t *testing.T) {
+	for _, pair := range [][2]string{
+		{"\tx", "→   x"},
+		{"a\u200bb", "ab"},
+		{"⟨U+200B⟩", "\u200b"},
+		{"\t", "    "},
+		{"x\r", "x"},
+	} {
+		if visibleDiff(pair[0]) == visibleDiff(pair[1]) {
+			t.Errorf("%q and %q render identically: %q", pair[0], pair[1], visibleDiff(pair[0]))
+		}
+	}
+	if got := visibleDiff("\treturn \"\\n\" // é"); got != `→   return "\n" // é` {
+		t.Fatalf("ordinary source altered: %q", got)
+	}
+	if strings.ContainsAny(visibleDiff("\x1b[31m\u202e\u00a0"), "\x1b\u202e\u00a0") {
+		t.Fatal("control characters reached the terminal")
 	}
 }

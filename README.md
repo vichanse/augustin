@@ -30,6 +30,8 @@ go run ./cmd/augustin --help
 - [Roadmap](docs/roadmap.md)
 - [Architecture decision](docs/adr/0001-foundation.md)
 - [Interactive approval](docs/adr/0002-interactive-approval.md)
+- [Controlled file editing](docs/adr/0003-controlled-file-editing.md)
+- [Edit quickstart](docs/edit-quickstart.md)
 - [Engineering instructions](AGENTS.md)
 
 ## Contributing
