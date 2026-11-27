@@ -84,3 +84,82 @@ func TestToolsAndPromptFollowMode(t *testing.T) {
 		t.Fatal("edit prompt must explain approval and forbid claiming tests ran")
 	}
 }
+
+func TestRunCommandOnlyInInteractiveExecuteMode(t *testing.T) {
+	dir := t.TempDir()
+	w, err := tools.OpenWorkspace(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	broker := approval.New()
+	asked := 0
+	broker.Attach(func(u approval.Update) {
+		if u.Open {
+			asked++
+			go broker.Resolve(u.Request.ID, false) // never actually run anything here
+		}
+	})
+	defer broker.Close()
+	call := model.ToolCall{Name: "run_command", Arguments: json.RawMessage(`{"command":"git","args":["status"]}`)}
+	for name, exec := range map[string]*tools.Registry{
+		"headless execute (no broker)": executorFor(w, tools.ExecuteWithApproval, nil),
+		"headless read-only (run)":     executorFor(w, tools.ReadOnly, nil),
+		"interactive read-only":        executorFor(w, tools.ReadOnly, broker),
+		"interactive edit":             executorFor(w, tools.EditWithApproval, broker),
+	} {
+		if _, err := exec.Execute(context.Background(), call); !errors.Is(err, tools.ErrDenied) {
+			t.Errorf("%s: run_command not denied: %v", name, err)
+		}
+	}
+	if asked != 0 {
+		t.Fatal("a denied mode asked for approval")
+	}
+	_, err = executorFor(w, tools.ExecuteWithApproval, broker).Execute(context.Background(), call)
+	if !errors.Is(err, tools.ErrRejected) && !errors.Is(err, tools.ErrExecutableNotFound) {
+		t.Fatalf("execute mode must reach approval (or report a missing git): %v", err)
+	}
+}
+
+func TestRunCommandExposureFollowsMode(t *testing.T) {
+	names := func(mode tools.Mode) string {
+		var out []string
+		for _, tool := range codingRequest(nil, mode).Tools {
+			out = append(out, tool.Name)
+		}
+		return strings.Join(out, ",")
+	}
+	if strings.Contains(names(tools.ReadOnly), "run_command") || strings.Contains(names(tools.EditWithApproval), "run_command") {
+		t.Fatal("run_command exposed outside execute mode")
+	}
+	if got := names(tools.ExecuteWithApproval); !strings.HasSuffix(got, ",edit_file,run_command") {
+		t.Fatalf("execute tools: %s", got)
+	}
+	execute := systemMessage(tools.ExecuteWithApproval).Content
+	if strings.Contains(execute, "You cannot run commands") || !strings.Contains(execute, "go test ./...") || !strings.Contains(execute, "exit_code 0") {
+		t.Fatalf("execute prompt: %q", execute)
+	}
+	if strings.Contains(systemMessage(tools.EditWithApproval).Content, "run_command") {
+		t.Fatal("edit prompt mentions run_command")
+	}
+}
+
+func TestPromptsRequireDirectToolCalls(t *testing.T) {
+	for _, mode := range []tools.Mode{tools.EditWithApproval, tools.ExecuteWithApproval} {
+		prompt := systemMessage(mode).Content
+		for _, want := range []string{"call edit_file directly", "never ask for permission in a conversational reply", "never authorizes an action", "never try to bypass"} {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("%s prompt misses %q", mode, want)
+			}
+		}
+	}
+	execute := systemMessage(tools.ExecuteWithApproval).Content
+	for _, want := range []string{"Call run_command directly", "run_command, then the edit, then run_command again", "Do not stop to describe"} {
+		if !strings.Contains(execute, want) {
+			t.Errorf("execute prompt misses %q", want)
+		}
+	}
+	if strings.Contains(systemMessage(tools.EditWithApproval).Content, "run_command") || strings.Contains(systemMessage(tools.ReadOnly).Content, "edit_file") {
+		t.Fatal("a prompt mentions a tool its mode does not have")
+	}
+}

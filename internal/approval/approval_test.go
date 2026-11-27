@@ -365,3 +365,32 @@ func TestOversizedDiffCanOnlyBeDenied(t *testing.T) {
 	}
 	b.Close()
 }
+
+func TestCommandProposalSnapshot(t *testing.T) {
+	b, rec := newBroker()
+	proposal := func(args ...string) tools.Proposal {
+		return tools.Proposal{Capability: tools.Execute, Call: model.ToolCall{Name: "run_command", Arguments: json.RawMessage(`{}`)}, Path: "/ws", Command: append([]string{"/usr/bin/go"}, args...)}
+	}
+	ch := make(chan result, 1)
+	go func() { ok, err := b.Approve(context.Background(), proposal("test", "./...")); ch <- result{ok, err} }()
+	req := waitPending(t, b)
+	if strings.Join(req.Command, " ") != "/usr/bin/go test ./..." || req.Path != "/ws" || req.Truncated {
+		t.Fatalf("snapshot: %+v", req)
+	}
+	b.Resolve(req.ID, false)
+	wait(t, ch)
+	// A different invocation is a different action and is asked again.
+	go b.Approve(context.Background(), proposal("vet", "./..."))
+	waitPending(t, b)
+	if rec.opened() != 2 {
+		t.Fatal("a different command was refused from memory")
+	}
+	b.Close()
+
+	b2, _ := newBroker()
+	go b2.Approve(context.Background(), proposal(make([]string, 100)...))
+	if req := waitPending(t, b2); !req.Truncated || b2.Resolve(req.ID, true) {
+		t.Fatal("an invocation with more arguments than shown was approvable")
+	}
+	b2.Close()
+}

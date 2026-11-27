@@ -32,6 +32,8 @@ go run ./cmd/augustin --help
 - [Interactive approval](docs/adr/0002-interactive-approval.md)
 - [Controlled file editing](docs/adr/0003-controlled-file-editing.md)
 - [Edit quickstart](docs/edit-quickstart.md)
+- [Controlled command execution](docs/adr/0004-controlled-command-execution.md)
+- [Execute quickstart](docs/execute-quickstart.md)
 - [Engineering instructions](AGENTS.md)
 
 ## Contributing

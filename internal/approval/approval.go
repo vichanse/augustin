@@ -30,6 +30,7 @@ const (
 	maxActionBytes = 4096
 	maxPathBytes   = 1024
 	maxDiffBytes   = 4096 // tools rejects larger diffs; this is defense in depth
+	maxArgs        = 64
 )
 
 // Request is an immutable snapshot of one proposed action. Its text fields
@@ -38,10 +39,11 @@ type Request struct {
 	ID         uint64
 	Capability tools.Capability
 	Tool       string
-	Action     string // compact JSON arguments, bounded
-	Path       string // target of a prepared edit, if any
-	Diff       string // unified diff of a prepared edit; shown instead of Action
-	Truncated  bool   // a field is incomplete: the request can only be denied
+	Action     string   // compact JSON arguments, bounded
+	Path       string   // target of a prepared edit, if any
+	Diff       string   // unified diff of a prepared edit; shown instead of Action
+	Command    []string // executable and arguments of a prepared command; Path is its directory
+	Truncated  bool     // a field is incomplete: the request can only be denied
 }
 
 // Update tells the UI that a request opened, or closed without a decision
@@ -183,8 +185,13 @@ func snapshot(id uint64, p tools.Proposal) Request {
 	action, actionCut := bound(action, maxActionBytes)
 	path, pathCut := bound(p.Path, maxPathBytes)
 	diff, diffCut := bound(p.Diff, maxDiffBytes)
-	return Request{ID: id, Capability: p.Capability, Tool: tool, Action: action, Path: path, Diff: diff,
-		Truncated: toolCut || actionCut || pathCut || diffCut}
+	command, commandCut := []string(nil), len(p.Command) > maxArgs
+	for _, arg := range p.Command[:min(len(p.Command), maxArgs)] {
+		arg, cut := bound(arg, maxPathBytes)
+		command, commandCut = append(command, arg), commandCut || cut
+	}
+	return Request{ID: id, Capability: p.Capability, Tool: tool, Action: action, Path: path, Diff: diff, Command: command,
+		Truncated: toolCut || actionCut || pathCut || diffCut || commandCut}
 }
 
 // bound cuts s to at most n bytes on a rune boundary.
@@ -209,7 +216,11 @@ func fingerprint(p tools.Proposal) [32]byte {
 		args = compact.Bytes()
 	}
 	h := sha256.New()
-	for _, part := range [][]byte{[]byte(p.Capability), []byte(p.Call.Name), args, []byte(p.Path), []byte(p.Diff)} {
+	parts := [][]byte{[]byte(p.Capability), []byte(p.Call.Name), args, []byte(p.Path), []byte(p.Diff)}
+	for _, arg := range p.Command {
+		parts = append(parts, []byte(arg))
+	}
+	for _, part := range parts {
 		h.Write([]byte{byte(len(part) >> 24), byte(len(part) >> 16), byte(len(part) >> 8), byte(len(part))})
 		h.Write(part)
 	}

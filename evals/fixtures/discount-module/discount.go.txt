@@ -1,0 +1,6 @@
+package pricing
+
+// FinalPrice returns the price after subtracting a discount.
+func FinalPrice(price, discount float64) float64 {
+	return price - price*discount/100
+}

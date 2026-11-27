@@ -119,6 +119,9 @@ func visibleDiff(s string) string {
 
 // previewLines is the action or diff exactly as the panel shows it.
 func (m shellModel) previewLines(width int) []string {
+	if len(m.approval.Command) > 0 {
+		return m.commandLines(width)
+	}
 	if m.approval.Diff == "" {
 		return actionLines(m.approval.Action, width)
 	}
@@ -186,9 +189,12 @@ func (m shellModel) renderPanel(lines []string, complete bool) string {
 		"Capability: " + visible(string(r.Capability)),
 		"Tool: " + visible(r.Tool),
 	}
-	if r.Diff != "" {
+	switch {
+	case len(r.Command) > 0:
+		parts = append(parts, "Directory: "+visibleDiff(r.Path), "Command:")
+	case r.Diff != "":
 		parts = append(parts, "Path: "+visibleDiff(r.Path), "Diff:")
-	} else {
+	default:
 		parts = append(parts, "Action:")
 	}
 	for _, l := range lines {
@@ -213,4 +219,19 @@ func (m shellModel) renderPanel(lines []string, complete bool) string {
 	}
 	// Width counts padding but not the border: the panel spans exactly m.width.
 	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(max(1, m.width-2)).Render(strings.Join(parts, "\n"))
+}
+
+// commandLines shows the exact executable and every argument on its own
+// numbered line, Go-quoted so spaces, empty and invisible arguments are exact.
+func (m shellModel) commandLines(width int) []string {
+	cmd := m.approval.Command
+	lines := wrapRunes("Executable: "+visibleDiff(cmd[0]), width)
+	for i, arg := range cmd[1:] {
+		lines = append(lines, wrapRunes(fmt.Sprintf("[%d] %s", i+1, strconv.Quote(arg)), width)...)
+	}
+	warning := "⚠ Runs local project code: tests and builds can read and write files, use the network and start other programs."
+	for _, chunk := range wrapRunes(warning, width) {
+		lines = append(lines, m.paint(chunk, "214"))
+	}
+	return lines
 }

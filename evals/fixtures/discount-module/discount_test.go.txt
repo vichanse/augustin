@@ -1,0 +1,9 @@
+package pricing
+
+import "testing"
+
+func TestFinalPrice(t *testing.T) {
+	if got := FinalPrice(50, 10); got != 40 {
+		t.Fatalf("FinalPrice(50, 10) = %v, want 40", got)
+	}
+}

@@ -16,9 +16,10 @@ type Handler func(context.Context, model.ToolCall) (string, error)
 // Prepared is a validated mutation that has not touched the workspace yet.
 // Apply must re-check the target and apply exactly what Diff shows.
 type Prepared struct {
-	Path  string
-	Diff  string
-	Apply func(context.Context) (string, error)
+	Path    string
+	Diff    string
+	Command []string
+	Apply   func(context.Context) (string, error)
 }
 
 // Preparer validates a mutating call and computes its effect without side effects.
@@ -81,7 +82,7 @@ func (r *Registry) executePrepared(ctx context.Context, call model.ToolCall, pre
 	if err != nil {
 		return "", err
 	}
-	if err := r.policy.approve(ctx, Proposal{Capability: capability, Call: call, Path: prepared.Path, Diff: prepared.Diff}); err != nil {
+	if err := r.policy.approve(ctx, Proposal{Capability: capability, Call: call, Path: prepared.Path, Diff: prepared.Diff, Command: prepared.Command}); err != nil {
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {

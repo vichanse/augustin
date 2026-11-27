@@ -515,3 +515,51 @@ func TestVisibleDiffIsUnambiguous(t *testing.T) {
 		t.Fatal("control characters reached the terminal")
 	}
 }
+
+func commandShell(t *testing.T, command ...string) (shellModel, <-chan decision) {
+	t.Helper()
+	b := approval.New()
+	updates := make(chan approval.Update, 4)
+	b.Attach(func(u approval.Update) { updates <- u })
+	t.Cleanup(b.Close)
+	out := make(chan decision, 1)
+	go func() {
+		ok, err := b.Approve(context.Background(), tools.Proposal{Capability: tools.Execute, Call: model.ToolCall{Name: "run_command", Arguments: json.RawMessage(`{"command":"go","args":["test","./..."]}`)}, Path: "/work/demo", Command: command})
+		out <- decision{ok, err}
+	}()
+	m := newShellModel("/work/demo", "openai", "test", false)
+	m.approvals, m.busy, m.mode = b, true, tools.ExecuteWithApproval
+	next, _ := m.Update(approvalUpdate(<-updates))
+	return next.(shellModel), out
+}
+
+func TestApprovalPanelShowsExactCommand(t *testing.T) {
+	m, ch := commandShell(t, "/usr/local/go/bin/go", "test", "./...", "", "a b")
+	view := m.View()
+	for _, want := range []string{"Capability: execute", "Directory: /work/demo", "Executable: /usr/local/go/bin/go", `[1] "test"`, `[2] "./..."`, `[3] ""`, `[4] "a b"`, "Runs local project code", "❯ Deny", "● EXECUTE"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("command panel missing %q:\n%s", want, view)
+		}
+	}
+	press(m, down, enter)
+	if d := outcome(t, ch); !d.ok {
+		t.Fatalf("command approval: %+v", d)
+	}
+}
+
+func TestIncompleteCommandPreviewCannotBeApproved(t *testing.T) {
+	m, ch := commandShell(t, "/usr/local/go/bin/go", "test", "./...")
+	small, _ := m.Update(tea.WindowSizeMsg{Width: 30, Height: 12})
+	got := small.(shellModel)
+	if got.previewComplete() {
+		t.Fatal("command preview fits a 30x12 terminal")
+	}
+	got.approvalChoice = choiceApprove
+	if press(got, enter).(shellModel).approval == nil {
+		t.Fatal("incomplete command preview approved")
+	}
+	press(got, esc)
+	if d := outcome(t, ch); d.ok {
+		t.Fatal("incomplete command preview approved")
+	}
+}

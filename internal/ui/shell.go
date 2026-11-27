@@ -548,6 +548,17 @@ func describeTool(call model.ToolCall) string {
 		return "List(" + target + ")"
 	case "edit_file":
 		return "Edit(" + target + ")"
+	case "run_command":
+		var run struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		}
+		_ = json.Unmarshal(call.Arguments, &run) // best effort: display only
+		label := SafeText(strings.ReplaceAll(strings.Join(append([]string{run.Command}, run.Args...), " "), "\n", " "))
+		if r := []rune(label); len(r) > 60 {
+			label = string(r[:59]) + "…"
+		}
+		return "Run(" + label + ")"
 	case "workspace_overview":
 		return "Overview"
 	default:
@@ -575,8 +586,11 @@ func (m *shellModel) setComposer(value string) {
 }
 
 func (m shellModel) modeBadge() string {
-	if m.mode == tools.EditWithApproval {
+	switch m.mode {
+	case tools.EditWithApproval:
 		return m.paint("● EDIT", "214") + " · every change needs approval"
+	case tools.ExecuteWithApproval:
+		return m.paint("● EXECUTE", "203") + " · every command and change needs approval"
 	}
 	return m.paint("● READ ONLY", "78")
 }
