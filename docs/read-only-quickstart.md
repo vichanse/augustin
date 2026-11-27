@@ -13,4 +13,4 @@ cp evals/fixtures/buggy-discount/discount.go.txt "$workspace/discount.go"
 go run ./cmd/augustin run --workspace "$workspace" "Read discount.go and explain the bug."
 ```
 
-API access is billed separately. The model choice is an example, not a default. stdout contains the final answer; stderr contains metadata-only JSONL events and CLI errors. Exit status 0 means the loop completed, not that its diagnosis is correct. No writes or shell tools are available. Unset the consent variable after use. Real-model verification is a separate milestone.
+API access is billed separately. The model choice is an example, not a default. stdout contains the final answer; stderr contains metadata-only JSONL events and CLI errors. Exit status 0 means the loop completed, not that its diagnosis is correct. Headless `run` never writes and has no shell tools; interactive editing is described in [the edit quickstart](edit-quickstart.md). Unset the consent variable after use. Real-model verification is a separate milestone.

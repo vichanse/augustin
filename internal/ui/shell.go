@@ -13,6 +13,7 @@ import (
 	"github.com/vichanse/augustin/internal/events"
 
 	"github.com/vichanse/augustin/internal/model"
+	"github.com/vichanse/augustin/internal/tools"
 	"github.com/vichanse/augustin/internal/version"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -21,7 +22,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-type TurnFunc func(context.Context, []model.Message, string, events.Sink) (string, error)
+// TurnFunc runs one turn with the mode snapshotted when the prompt was sent.
+type TurnFunc func(context.Context, []model.Message, string, tools.Mode, events.Sink) (string, error)
 
 type liveEvent events.Event
 
@@ -73,6 +75,7 @@ type shellModel struct {
 	promptIndex           int      // == len(prompts) when not browsing
 	draft                 string   // unsent text saved while browsing
 	approvals             *approval.Broker
+	mode                  tools.Mode        // local user choice; never changed by the model
 	approval              *approval.Request // pending decision; blocks normal input
 	approvalChoice        int
 	started               time.Time
@@ -107,7 +110,7 @@ func newShellModel(path, provider, model string, color bool) shellModel {
 	if color {
 		spin.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("99"))
 	}
-	return shellModel{path: path, provider: provider, model: model, color: color, width: 80, height: 24, composer: composer, spinner: spin, mdStyle: "dark"}
+	return shellModel{path: path, provider: provider, model: model, color: color, width: 80, height: 24, composer: composer, spinner: spin, mdStyle: "dark", mode: tools.ReadOnly}
 }
 
 func (m shellModel) Init() tea.Cmd {
@@ -341,8 +344,9 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					turnCtx, cancel := context.WithCancel(m.ctx)
 					m.cancelTurn = cancel
 					history := append([]model.Message(nil), m.history...)
+					mode := m.mode // snapshot: a later /mode cannot change a running turn
 					return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
-						answer, err := m.turn(turnCtx, history, value, m.sink)
+						answer, err := m.turn(turnCtx, history, value, mode, m.sink)
 						// Providers may surface cancellation as a transport error, so ask the context.
 						return turnDone{answer: answer, err: err, canceled: turnCtx.Err() != nil}
 					})
@@ -384,7 +388,7 @@ func (m shellModel) userLine(prompt string) string {
 func (m shellModel) View() string {
 	w := max(1, m.width)
 	rule := m.paint(strings.Repeat("─", w), "240")
-	mode := m.paint("● READ ONLY", "78") + " · Workspace trusted"
+	mode := m.modeBadge() + " · Workspace trusted"
 	if m.approval != nil {
 		// The panel must stay whole: crop the live area from the top to make room.
 		footer := strings.Join([]string{mode, m.approvalPanel(), m.keyHint()}, "\n")
@@ -542,6 +546,8 @@ func describeTool(call model.ToolCall) string {
 			target = "."
 		}
 		return "List(" + target + ")"
+	case "edit_file":
+		return "Edit(" + target + ")"
 	case "workspace_overview":
 		return "Overview"
 	default:
@@ -566,4 +572,11 @@ func (m *shellModel) setComposer(value string) {
 	m.composer.SetValue(value)
 	m.resizeComposer()
 	m.commandIndex = 0
+}
+
+func (m shellModel) modeBadge() string {
+	if m.mode == tools.EditWithApproval {
+		return m.paint("● EDIT", "214") + " · every change needs approval"
+	}
+	return m.paint("● READ ONLY", "78")
 }

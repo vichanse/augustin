@@ -8,6 +8,7 @@ import (
 
 	"github.com/vichanse/augustin/internal/events"
 	"github.com/vichanse/augustin/internal/model"
+	"github.com/vichanse/augustin/internal/tools"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -49,7 +50,7 @@ func TestComposerSubmission(t *testing.T) {
 func TestConversationTurn(t *testing.T) {
 	m := newShellModel("/workspace", "openai", "test", false)
 	m.ctx = context.Background()
-	m.turn = func(_ context.Context, history []model.Message, prompt string, _ events.Sink) (string, error) {
+	m.turn = func(_ context.Context, history []model.Message, prompt string, _ tools.Mode, _ events.Sink) (string, error) {
 		if len(history) != 0 || prompt != "hello" {
 			t.Fatal("unexpected turn input")
 		}
@@ -116,7 +117,7 @@ func isQuit(cmd tea.Cmd) bool {
 func TestEscapeInterruptsTurn(t *testing.T) {
 	m := newShellModel("/workspace", "openai", "test", false)
 	m.ctx = context.Background()
-	m.turn = func(ctx context.Context, _ []model.Message, _ string, _ events.Sink) (string, error) {
+	m.turn = func(ctx context.Context, _ []model.Message, _ string, _ tools.Mode, _ events.Sink) (string, error) {
 		<-ctx.Done()
 		return "", ctx.Err()
 	}
@@ -257,9 +258,9 @@ func TestPromptHistoryRecall(t *testing.T) {
 
 func TestSubmitRecordsPrompt(t *testing.T) {
 	m := newShellModel("/workspace", "openai", "test", false)
-	m.composer.SetValue("/mo")
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // runs /model from the menu
-	if got := next.(shellModel).prompts; len(got) != 1 || got[0] != "/model" {
+	m.composer.SetValue("/ver")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // runs /version from the menu
+	if got := next.(shellModel).prompts; len(got) != 1 || got[0] != "/version" {
 		t.Fatalf("menu command not recorded: %q", got)
 	}
 }

@@ -70,7 +70,7 @@ type result struct {
 func approveAsync(b *approval.Broker, ctx context.Context, args string) <-chan result {
 	out := make(chan result, 1)
 	go func() {
-		ok, err := b.Approve(ctx, tools.Edit, model.ToolCall{Name: "fake_write", Arguments: json.RawMessage(args)})
+		ok, err := b.Approve(ctx, tools.Proposal{Capability: tools.Edit, Call: model.ToolCall{Name: "fake_write", Arguments: json.RawMessage(args)}})
 		out <- result{ok, err}
 	}()
 	return out
@@ -240,7 +240,7 @@ func TestConcurrentRequestIsRejected(t *testing.T) {
 }
 
 func TestNoUIFailsClosed(t *testing.T) {
-	ok, err := approval.New().Approve(context.Background(), tools.Edit, model.ToolCall{Name: "fake_write"})
+	ok, err := approval.New().Approve(context.Background(), tools.Proposal{Capability: tools.Edit, Call: model.ToolCall{Name: "fake_write"}})
 	if ok || !errors.Is(err, approval.ErrClosed) {
 		t.Fatalf("headless approval: %v %v", ok, err)
 	}
@@ -249,7 +249,7 @@ func TestNoUIFailsClosed(t *testing.T) {
 func TestRequestIsBoundedImmutableSnapshot(t *testing.T) {
 	b, _ := newBroker()
 	args := []byte(`{"path": "a.txt",   "content": "` + strings.Repeat("é", 4000) + `"}`)
-	go b.Approve(context.Background(), tools.Edit, model.ToolCall{Name: "fake_write", Arguments: args})
+	go b.Approve(context.Background(), tools.Proposal{Capability: tools.Edit, Call: model.ToolCall{Name: "fake_write", Arguments: args}})
 	req := waitPending(t, b)
 	copy(args, `{"path": "evil"`) // mutating the caller's buffer must not change what is shown
 	if !strings.HasPrefix(req.Action, `{"path":"a.txt","content":"`) || !req.Truncated || len(req.Action) > 4096 || !json.Valid([]byte(req.Action+`"}`)) {
@@ -312,14 +312,14 @@ func TestRejectionMemoryIgnoresInsignificantWhitespace(t *testing.T) {
 		t.Fatalf("whitespace variant re-prompted: %+v prompts=%d", r, rec.opened())
 	}
 	// Whitespace inside strings is meaningful and must still be asked about.
-	go b.Approve(context.Background(), tools.Edit, model.ToolCall{Name: "fake_write", Arguments: json.RawMessage(`{"path":"a .txt"}`)})
+	go b.Approve(context.Background(), tools.Proposal{Capability: tools.Edit, Call: model.ToolCall{Name: "fake_write", Arguments: json.RawMessage(`{"path":"a .txt"}`)}})
 	waitPending(t, b)
 	b.Close()
 }
 
 func TestTruncatedToolNameCanOnlyBeDenied(t *testing.T) {
 	b, _ := newBroker()
-	go b.Approve(context.Background(), tools.Edit, model.ToolCall{Name: strings.Repeat("t", 100), Arguments: json.RawMessage(`{}`)})
+	go b.Approve(context.Background(), tools.Proposal{Capability: tools.Edit, Call: model.ToolCall{Name: strings.Repeat("t", 100), Arguments: json.RawMessage(`{}`)}})
 	req := waitPending(t, b)
 	if !req.Truncated || len(req.Tool) > 64 {
 		t.Fatalf("cut tool name not flagged: truncated=%v len=%d", req.Truncated, len(req.Tool))
@@ -329,6 +329,39 @@ func TestTruncatedToolNameCanOnlyBeDenied(t *testing.T) {
 	}
 	if !b.Resolve(req.ID, false) {
 		t.Fatal("deny refused")
+	}
+	b.Close()
+}
+
+func TestEditProposalSnapshotCarriesPathAndDiff(t *testing.T) {
+	b, rec := newBroker()
+	diff := "--- a/f.go\n+++ b/f.go\n@@ -1,1 +1,1 @@\n-a\n+b"
+	ch := make(chan result, 1)
+	go func() {
+		ok, err := b.Approve(context.Background(), tools.Proposal{Capability: tools.Edit, Call: model.ToolCall{Name: "edit_file", Arguments: json.RawMessage(`{}`)}, Path: "f.go", Diff: diff})
+		ch <- result{ok, err}
+	}()
+	req := waitPending(t, b)
+	if req.Path != "f.go" || req.Diff != diff || req.Truncated {
+		t.Fatalf("snapshot: %+v", req)
+	}
+	b.Resolve(req.ID, false)
+	wait(t, ch)
+	// Same arguments against changed content is a different action: ask again.
+	go b.Approve(context.Background(), tools.Proposal{Capability: tools.Edit, Call: model.ToolCall{Name: "edit_file", Arguments: json.RawMessage(`{}`)}, Path: "f.go", Diff: diff + "\n+c"})
+	waitPending(t, b)
+	if rec.opened() != 2 {
+		t.Fatal("a different diff was refused from memory")
+	}
+	b.Close()
+}
+
+func TestOversizedDiffCanOnlyBeDenied(t *testing.T) {
+	b, _ := newBroker()
+	go b.Approve(context.Background(), tools.Proposal{Capability: tools.Edit, Call: model.ToolCall{Name: "edit_file", Arguments: json.RawMessage(`{}`)}, Path: "f.go", Diff: strings.Repeat("+x\n", 2000)})
+	req := waitPending(t, b)
+	if !req.Truncated || b.Resolve(req.ID, true) {
+		t.Fatal("oversized diff approvable")
 	}
 	b.Close()
 }

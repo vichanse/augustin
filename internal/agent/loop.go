@@ -215,7 +215,7 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 
 func safeToolName(name string) string {
 	switch name {
-	case "read_file", "list_files", "workspace_overview":
+	case "read_file", "list_files", "workspace_overview", "edit_file":
 		return name
 	default:
 		return "other"
@@ -232,6 +232,18 @@ func classifyToolError(err error) (events.Reason, bool) {
 		return "user_rejected", true // tell the model, which may explain or propose another way
 	case errors.Is(err, tools.ErrDenied), errors.Is(err, tools.ErrSensitivePath):
 		return "permission_denied", false
+	case errors.Is(err, tools.ErrFileChanged):
+		return "file_changed", true
+	case errors.Is(err, tools.ErrNoMatch):
+		return "old_string_not_found", true
+	case errors.Is(err, tools.ErrAmbiguousMatch):
+		return "old_string_ambiguous", true
+	case errors.Is(err, tools.ErrNoOp):
+		return "no_op_edit", true
+	case errors.Is(err, tools.ErrNotText):
+		return "not_text_file", true
+	case errors.Is(err, tools.ErrDiffTooLarge):
+		return "diff_too_large", true
 	case errors.Is(err, tools.ErrInvalidArguments):
 		return "invalid_arguments", true
 	case errors.Is(err, tools.ErrDirectoryRequired):
