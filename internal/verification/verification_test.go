@@ -130,3 +130,22 @@ func TestMarkIncompleteOnlyAffectsMissingVerification(t *testing.T) {
 		t.Fatalf("a real failure must stay failed: %+v", r)
 	}
 }
+
+// Regression: a later run on the same revision decides, even after a pass.
+func TestTimeoutAfterPassOnSameRevisionIsNotPassed(t *testing.T) {
+	r, next := report(true, edit(tools.EvidenceApplied, "a.go"), goTest(tools.EvidenceApplied, "exited", 0), goTest(tools.EvidenceApplied, "timeout", 0))
+	if r.Status == Passed || r.Status != Failed || r.Reason != "timed out" || next == "" {
+		t.Fatalf("timeout with exit 0 after a pass: %+v %q", r, next)
+	}
+}
+
+func TestExecutionErrorWithZeroExitIsNotPassed(t *testing.T) {
+	r, next := report(true, edit(tools.EvidenceApplied, "a.go"), goTest(tools.EvidenceApplied, "error", 0))
+	if r.Status != Incomplete || r.VerifiedRevision != 0 || !strings.Contains(next, "did not complete") {
+		t.Fatalf("execution error with exit 0: %+v %q", r, next)
+	}
+	r, _ = report(true, edit(tools.EvidenceApplied, "a.go"), goTest(tools.EvidenceApplied, "exited", 0), goTest(tools.EvidenceApplied, "error", 0))
+	if r.Status == Passed {
+		t.Fatalf("execution error after a pass: %+v", r)
+	}
+}

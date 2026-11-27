@@ -227,8 +227,14 @@ func (r *commandRunner) run(ctx context.Context, request Evidence, argv []string
 		return "", request, err // never started
 	}
 	status := "exited"
-	if runCtx.Err() != nil {
+	var exitErr *exec.ExitError
+	switch {
+	case runCtx.Err() != nil:
 		status = "timeout"
+	case err != nil && !errors.As(err, &exitErr):
+		// Not a clean exit (output copy failure, pipes held open past
+		// WaitDelay): whatever the exit code, this cannot verify anything.
+		status = "error"
 	}
 	request.Status, request.ExitCode = status, cmd.ProcessState.ExitCode()
 	result, err := json.Marshal(map[string]any{

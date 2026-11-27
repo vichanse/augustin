@@ -52,6 +52,12 @@ type testRun struct {
 	exitCode int
 }
 
+// interrupted reports a run that did not complete normally: canceled, never
+// started, or ended with an execution error. Its exit code means nothing.
+func (r *testRun) interrupted() bool {
+	return r.kind == tools.EvidenceFailed || (r.kind == tools.EvidenceApplied && r.status != "exited" && r.status != "timeout")
+}
+
 // Tracker accumulates evidence for one turn.
 type Tracker struct {
 	mu         sync.Mutex
@@ -111,7 +117,7 @@ func (t *Tracker) Continuation() string {
 	case Failed:
 		return fmt.Sprintf("The harness recorded that %s did not pass after the latest edit (%s). Analyze the test output already provided, fix the problem with edit_file, then request %s again with run_command. Do not claim that the tests pass.", CommandText, r.Reason, CommandText)
 	case Incomplete:
-		if t.last != nil && t.last.revision == t.edits && t.last.kind == tools.EvidenceFailed {
+		if t.last != nil && t.last.revision == t.edits && t.last.interrupted() {
 			return "The harness recorded that the last " + CommandText + " run did not complete. Request " + CommandText + " again with run_command before claiming verification."
 		}
 	}
@@ -142,11 +148,11 @@ func (t *Tracker) report() Report {
 	switch {
 	case t.edits == 0:
 		r.Status = NotRequired
-	case t.verified == t.edits && current && t.last.kind == tools.EvidenceApplied && t.last.exitCode == 0:
+	case t.verified == t.edits && current && t.last.kind == tools.EvidenceApplied && t.last.status == "exited" && t.last.exitCode == 0:
 		r.Status = Passed
 	case current && t.last.kind == tools.EvidenceRejected:
 		r.Status, r.Reason = Rejected, "the user declined test execution"
-	case current && t.last.kind == tools.EvidenceFailed:
+	case current && t.last.interrupted():
 		r.Status, r.Reason = Incomplete, CommandText+" did not complete"
 	case current && t.last.status == "timeout":
 		r.Status, r.Reason = Failed, "timed out"

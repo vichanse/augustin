@@ -62,3 +62,23 @@ func TestCommandLeavesNoChildRunning(t *testing.T) {
 		}
 	}
 }
+
+// Regression: the process exits 0, but a child keeps stdout open past the
+// WaitDelay, so Run fails. That is not a clean exit and must not verify.
+func TestExecutionErrorDespiteZeroExitIsNotAnExit(t *testing.T) {
+	bin := fakeBin(t, map[string]string{"go": `sleep 30 & exit 0`})
+	s := newCommandSetup(t, bin)
+	var evidence []Evidence
+	r := s.registry(ExecutePolicy())
+	r.Observe(func(e Evidence) { evidence = append(evidence, e) })
+	res, err := execute(t, r, context.Background(), runCall("go", "test", "./..."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "error" || res.ExitCode != 0 {
+		t.Fatalf("result: status %q exit %d", res.Status, res.ExitCode)
+	}
+	if len(evidence) != 1 || evidence[0].Kind != EvidenceApplied || evidence[0].Status != "error" {
+		t.Fatalf("evidence: %+v", evidence)
+	}
+}
