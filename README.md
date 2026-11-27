@@ -34,6 +34,7 @@ go run ./cmd/augustin --help
 - [Edit quickstart](docs/edit-quickstart.md)
 - [Controlled command execution](docs/adr/0004-controlled-command-execution.md)
 - [Execute quickstart](docs/execute-quickstart.md)
+- [Compact paste](docs/adr/0005-compact-paste.md)
 - [Engineering instructions](AGENTS.md)
 
 ## Contributing
