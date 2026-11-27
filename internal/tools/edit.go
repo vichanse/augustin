@@ -136,8 +136,9 @@ func (w *Workspace) prepareEdit(ctx context.Context, call model.ToolCall) (Prepa
 	}}, nil
 }
 
-// applyEdit writes exactly the prepared content if the file is still the one
-// that was previewed. The identity and hash check narrows, but cannot close,
+// applyEdit writes exactly the prepared content if the file still holds the
+// previewed bytes. The hash is the guarantee; the identity check is best effort
+// because a filesystem may reuse the inode of a deleted file. Neither closes
 // the window for a concurrent writer between the check and the rename.
 func (w *Workspace) applyEdit(ctx context.Context, path string, original fs.FileInfo, sum [32]byte, content string, removed, added int) (string, error) {
 	if err := ctx.Err(); err != nil {

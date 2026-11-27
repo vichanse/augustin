@@ -256,9 +256,11 @@ func TestEditRejectsFileChangedWhileWaiting(t *testing.T) {
 		"content changed": func(dir string) error {
 			return os.WriteFile(filepath.Join(dir, "discount.go"), []byte(discountSource+"// concurrent\n"), 0o640)
 		},
+		// The original is kept alive elsewhere, so its inode cannot be reused:
+		// the identity check must notice the swap even though the bytes match.
 		"replaced by a new file with identical content": func(dir string) error {
 			path := filepath.Join(dir, "discount.go")
-			if err := os.Remove(path); err != nil {
+			if err := os.Rename(path, path+".old"); err != nil {
 				return err
 			}
 			return os.WriteFile(path, []byte(discountSource), 0o640)
@@ -284,6 +286,33 @@ func TestEditRejectsFileChangedWhileWaiting(t *testing.T) {
 		}
 		noTempFiles(t, dir)
 	}
+}
+
+// Deleting and recreating a file lets the filesystem reuse its inode (common
+// on Linux), so identity cannot always tell the files apart. The hash still
+// guarantees the content is what was previewed: either the edit is refused,
+// or exactly the approved change is written. Nothing else is acceptable.
+func TestEditRecreatedIdenticalFileGetsOnlyTheApprovedChange(t *testing.T) {
+	dir, w := editWorkspace(t, map[string]string{"discount.go": discountSource})
+	path := filepath.Join(dir, "discount.go")
+	a := &approver{decide: func(Proposal) (bool, error) {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(discountSource), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		return true, nil
+	}}
+	_, err := editRegistry(w, a).Execute(context.Background(), editCall("discount.go", "+ discount", "- discount"))
+	after := readBack(t, dir, "discount.go")
+	switch {
+	case errors.Is(err, ErrFileChanged) && after == discountSource:
+	case err == nil && after == strings.Replace(discountSource, "+ discount", "- discount", 1):
+	default:
+		t.Fatalf("err=%v content=%q", err, after)
+	}
+	noTempFiles(t, dir)
 }
 
 func TestEditCanceledBeforeApplication(t *testing.T) {
