@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 
 	"github.com/vichanse/augustin/internal/model"
 )
@@ -23,8 +24,14 @@ const (
 	ExecuteWithApproval Mode = "execute-with-approval"
 )
 
+// ErrRejected is an explicit user refusal of one action. Unlike ErrDenied
+// (a policy violation), the agent may recover and explain or propose another way.
+var ErrRejected = errors.New("action rejected by user")
+
 // Approver must approve the exact action, not merely its tool name.
-type Approver func(context.Context, model.ToolCall) (bool, error)
+// It returns (false, nil) for an explicit rejection and an error when no
+// decision was made (canceled, deadline, UI closed); both fail closed.
+type Approver func(context.Context, Capability, model.ToolCall) (bool, error)
 
 type Policy struct {
 	Mode         Mode
@@ -49,7 +56,7 @@ func (p Policy) authorize(ctx context.Context, call model.ToolCall) error {
 		(capability == Execute && p.Mode == ExecuteWithApproval)) || p.Approve == nil {
 		return ErrDenied
 	}
-	approved, err := p.Approve(ctx, call)
+	approved, err := p.Approve(ctx, capability, call)
 	if err != nil {
 		return err
 	}
@@ -57,7 +64,7 @@ func (p Policy) authorize(ctx context.Context, call model.ToolCall) error {
 		return err
 	}
 	if !approved {
-		return ErrDenied
+		return ErrRejected
 	}
 	return nil
 }

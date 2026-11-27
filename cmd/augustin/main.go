@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/vichanse/augustin/internal/agent"
+	"github.com/vichanse/augustin/internal/approval"
 	"github.com/vichanse/augustin/internal/config"
 	"github.com/vichanse/augustin/internal/events"
 	"github.com/vichanse/augustin/internal/model"
@@ -91,7 +92,11 @@ func run(args []string, out, errOut io.Writer) int {
 				fmt.Fprintln(errOut, "cannot initialize provider")
 				return 2
 			}
-			loop := agent.Loop{Provider: p, Executor: tools.NewWithPolicy(w.Handlers(), []string{"read_file", "list_files", "workspace_overview"}, tools.ReadPolicy()), MaxIterations: c.MaxIterations, Budget: c.Budget, ReserveFinalResponse: true}
+			// The shell answers approvals, but ReadPolicy never asks: production stays read-only.
+			approvals := approval.New()
+			policy := tools.ReadPolicy()
+			policy.Approve = approvals.Approve
+			loop := agent.Loop{Provider: p, Executor: tools.NewWithPolicy(w.Handlers(), []string{"read_file", "list_files", "workspace_overview"}, policy), MaxIterations: c.MaxIterations, Budget: c.Budget, ReserveFinalResponse: true}
 			turn := func(ctx context.Context, history []model.Message, prompt string, sink events.Sink) (string, error) {
 				messages := append([]model.Message{systemMessage()}, history...)
 				messages = append(messages, model.Message{Role: model.RoleUser, Content: prompt})
@@ -104,7 +109,7 @@ func run(args []string, out, errOut io.Writer) int {
 				}
 				return result.Messages[len(result.Messages)-1].Content, nil
 			}
-			if err := ui.RunShell(ctx, os.Stdin, out, path, c.Provider, c.Model, ui.ColorEnabled(out, os.LookupEnv), turn); err != nil {
+			if err := ui.RunShell(ctx, os.Stdin, out, path, c.Provider, c.Model, ui.ColorEnabled(out, os.LookupEnv), turn, approvals); err != nil {
 				fmt.Fprintln(errOut, "interactive session failed")
 				return 1
 			}

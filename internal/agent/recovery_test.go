@@ -36,3 +36,11 @@ func TestPolicyErrorsNotRecoverable(t *testing.T) {
 		}
 	}
 }
+
+func TestUserRejectionIsRecoverableAndDistinct(t *testing.T) {
+	reason, recoverable := classifyToolError(fmt.Errorf("wrapped: %w", tools.ErrRejected))
+	denied, deniedRecoverable := classifyToolError(tools.ErrDenied)
+	if reason != "user_rejected" || !recoverable || denied == reason || deniedRecoverable {
+		t.Fatalf("rejection=%s/%v denial=%s/%v", reason, recoverable, denied, deniedRecoverable)
+	}
+}
