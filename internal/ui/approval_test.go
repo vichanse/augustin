@@ -104,10 +104,10 @@ func TestApprovalApproveOnceAndEscapeDenies(t *testing.T) {
 func TestApprovalBlocksPromptsAndCommands(t *testing.T) {
 	m, ch := pendingShell(t, `{}`)
 	m.busy = false // even an idle shell must not submit while a decision is pending
-	m.turn = func(context.Context, []model.Message, string, tools.Mode, events.Sink) (string, error) {
+	m.turn = textTurn(func(context.Context, []model.Message, string, tools.Mode, events.Sink) (string, error) {
 		t.Fatal("prompt submitted during approval")
 		return "", nil
-	}
+	})
 	var next tea.Model = m
 	for _, r := range "/exit" {
 		next = press(next, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
@@ -274,12 +274,12 @@ func TestClosingShellReleasesPendingApproval(t *testing.T) {
 	in, keys := io.Pipe()
 	defer keys.Close()
 	released := make(chan error, 1)
-	turn := func(context.Context, []model.Message, string, tools.Mode, events.Sink) (string, error) {
+	turn := textTurn(func(context.Context, []model.Message, string, tools.Mode, events.Sink) (string, error) {
 		// Background, not the turn context: only closing the shell may release it.
 		_, err := b.Approve(context.Background(), tools.Proposal{Capability: tools.Edit, Call: model.ToolCall{Name: "fake_write", Arguments: json.RawMessage(`{}`)}})
 		released <- err
 		return "", err
-	}
+	})
 	done := make(chan error, 1)
 	go func() {
 		done <- RunShell(context.Background(), in, io.Discard, t.TempDir(), "openai", "test", false, turn, b)

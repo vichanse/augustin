@@ -84,10 +84,10 @@ func TestTurnUsesModeSnapshot(t *testing.T) {
 	m := newShellModel(".", "openai", "test", false)
 	m.ctx = context.Background()
 	var got tools.Mode
-	m.turn = func(_ context.Context, _ []model.Message, _ string, mode tools.Mode, _ events.Sink) (string, error) {
+	m.turn = textTurn(func(_ context.Context, _ []model.Message, _ string, mode tools.Mode, _ events.Sink) (string, error) {
 		got = mode
 		return "ok", nil
-	}
+	})
 	next, _ := m.runCommand("/mode edit")
 	m = next.(shellModel)
 	m.composer.SetValue("fix it")

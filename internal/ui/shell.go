@@ -14,6 +14,7 @@ import (
 
 	"github.com/vichanse/augustin/internal/model"
 	"github.com/vichanse/augustin/internal/tools"
+	"github.com/vichanse/augustin/internal/verification"
 	"github.com/vichanse/augustin/internal/version"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -23,7 +24,14 @@ import (
 )
 
 // TurnFunc runs one turn with the mode snapshotted when the prompt was sent.
-type TurnFunc func(context.Context, []model.Message, string, tools.Mode, events.Sink) (string, error)
+type TurnFunc func(context.Context, []model.Message, string, tools.Mode, events.Sink) (TurnResult, error)
+
+// TurnResult is a turn's answer and the harness verification verdict, which
+// is returned even when the turn fails after an edit was applied.
+type TurnResult struct {
+	Answer       string
+	Verification verification.Report
+}
 
 type liveEvent events.Event
 
@@ -42,9 +50,10 @@ func (s eventSink) ToolCall(call model.ToolCall) { s.call(liveToolCall(call)) }
 type liveDelta string
 
 type turnDone struct {
-	answer   string
-	err      error
-	canceled bool
+	answer       string
+	verification verification.Report
+	err          error
+	canceled     bool
 }
 
 // disarmQuit expires a first Ctrl+C so a later single press does not exit.
@@ -206,6 +215,11 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancelTurn()
 			m.cancelTurn = nil
 		}
+		// The harness verdict survives a failed or canceled turn: edits may already be applied.
+		summary := m.verificationSummary(e.verification)
+		if e.err != nil && summary != "" {
+			m.pending = append(m.pending, summary)
+		}
 		if e.canceled {
 			m.status = "Interrupted. Prompt restored; edit it or press Enter to resend."
 			m.composer.SetValue(m.submitted)
@@ -221,6 +235,9 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.status = ""
 			m.pending = append(m.pending, m.userLine(m.compact(m.submitted))+"\n"+m.activitySummary(), m.paint("Augustin", "99")+"\n"+m.markdown(e.answer))
+			if summary != "" {
+				m.pending = append(m.pending, summary)
+			}
 			if err := m.saveSession(); err != nil {
 				m.commandNotice = "Cannot save session locally."
 			}
@@ -356,9 +373,9 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					history := append([]model.Message(nil), m.history...)
 					mode := m.mode // snapshot: a later /mode cannot change a running turn
 					return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
-						answer, err := m.turn(turnCtx, history, prompt, mode, m.sink)
+						res, err := m.turn(turnCtx, history, prompt, mode, m.sink)
 						// Providers may surface cancellation as a transport error, so ask the context.
-						return turnDone{answer: answer, err: err, canceled: turnCtx.Err() != nil}
+						return turnDone{answer: res.Answer, verification: res.Verification, err: err, canceled: turnCtx.Err() != nil}
 					})
 				}
 			}

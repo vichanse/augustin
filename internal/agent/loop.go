@@ -12,6 +12,7 @@ import (
 	"github.com/vichanse/augustin/internal/events"
 	"github.com/vichanse/augustin/internal/model"
 	"github.com/vichanse/augustin/internal/tools"
+	"github.com/vichanse/augustin/internal/verification"
 )
 
 var ErrIterationLimit = errors.New("agent iteration limit reached")
@@ -30,7 +31,14 @@ type Loop struct {
 	Events               events.Sink
 	Budget               Budget
 	ReserveFinalResponse bool
+	// Verification, when set, receives registry evidence for the turn and
+	// gates completion: see verificationGate.
+	Verification *verification.Tracker
 }
+
+// maxVerificationContinuations bounds how often one turn is sent back for
+// verification; continuations still consume every other budget.
+const maxVerificationContinuations = 2
 
 // Budget bounds tool execution and cooperative run duration.
 // Zero values select conservative defaults.
@@ -45,6 +53,8 @@ type Result struct {
 	Iterations  int
 	ToolCalls   int
 	OutputBytes int
+	// Verification is the harness verdict, also set when the run fails.
+	Verification verification.Report
 }
 
 func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr error) {
@@ -60,6 +70,9 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 	}
 	emit(events.Event{Kind: events.AgentStarted})
 	defer func() {
+		if l.Verification != nil {
+			result.Verification = l.Verification.Report()
+		}
 		kind := events.AgentFailed
 		reason := events.ExecutionError
 		switch {
@@ -96,6 +109,7 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 	}
 	ctx, cancel := context.WithTimeout(ctx, b.Timeout)
 	defer cancel()
+	continuations := 0
 	allowed := make(map[string]bool, len(req.Tools))
 	for _, tool := range req.Tools {
 		allowed[tool.Name] = true
@@ -139,20 +153,19 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 		if msg.Role != model.RoleAssistant {
 			return result, ErrInvalidResponse
 		}
+		finishing := false
 		switch response.FinishReason {
 		case model.FinishLength:
-			if len(msg.ToolCalls) == 0 && msg.Content != "" {
-				msg.Content += "\n\n[Response truncated: model completion token limit reached.]"
-				result.Messages = append(result.Messages, msg)
-				return result, nil
+			if len(msg.ToolCalls) != 0 || msg.Content == "" {
+				return result, fmt.Errorf("%w: completion token limit reached", ErrInvalidResponse)
 			}
-			return result, fmt.Errorf("%w: completion token limit reached", ErrInvalidResponse)
+			msg.Content += "\n\n[Response truncated: model completion token limit reached.]"
+			finishing = true
 		case model.FinishStop:
 			if len(msg.ToolCalls) != 0 {
 				return result, ErrInvalidResponse
 			}
-			result.Messages = append(result.Messages, msg)
-			return result, nil
+			finishing = true
 		case model.FinishToolCalls:
 			if final {
 				return result, ErrIterationLimit
@@ -162,6 +175,14 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 			}
 		default:
 			return result, fmt.Errorf("%w: unsupported finish reason", ErrInvalidResponse)
+		}
+		if finishing {
+			result.Messages = append(result.Messages, msg)
+			if instruction := l.verificationGate(ctx, result, final, b, &continuations); instruction != "" {
+				result.Messages = append(result.Messages, model.Message{Role: model.RoleSystem, Content: instruction})
+				continue
+			}
+			return result, nil
 		}
 		if len(msg.ToolCalls) > b.MaxToolCalls-result.ToolCalls {
 			return result, fmt.Errorf("%w: tool calls", ErrBudgetExceeded)
@@ -265,4 +286,28 @@ func classifyToolError(err error) (events.Reason, bool) {
 	default:
 		return events.ExecutionError, false
 	}
+}
+
+// verificationGate decides whether a model that tries to finish is sent back
+// to obtain verification. It only continues while a non-final iteration and
+// a tool call remain for the test run plus a later answer, so the reserved
+// final response never gets tools. Otherwise it records why verification is
+// incomplete and lets the turn finish with the harness verdict.
+func (l Loop) verificationGate(ctx context.Context, result Result, final bool, b Budget, used *int) string {
+	if l.Verification == nil {
+		return ""
+	}
+	instruction := l.Verification.Continuation()
+	switch {
+	case instruction == "":
+		return ""
+	case *used >= maxVerificationContinuations:
+		l.Verification.MarkIncomplete("verification retries exhausted")
+	case final || result.Iterations > l.MaxIterations-2 || result.ToolCalls >= b.MaxToolCalls || ctx.Err() != nil:
+		l.Verification.MarkIncomplete("execution budget exhausted")
+	default:
+		*used++
+		return instruction
+	}
+	return ""
 }

@@ -23,7 +23,7 @@ func TestCommandLeavesNoChildRunning(t *testing.T) {
 		timeout time.Duration
 	}{
 		"turn canceled":   {script: `sleep 60 & echo $! > "$0.child"; wait`, cancel: true, timeout: time.Minute},
-		"command timeout": {script: `sleep 60 & echo $! > "$0.child"; wait`, timeout: 300 * time.Millisecond},
+		"command timeout": {script: `sleep 60 & echo $! > "$0.child"; wait`, timeout: time.Second}, // room to start the child under load
 		"normal exit":     {script: `sleep 60 & echo $! > "$0.child"; exit 0`, timeout: time.Minute},
 	} {
 		bin := fakeBin(t, map[string]string{"go": tc.script})
@@ -31,7 +31,16 @@ func TestCommandLeavesNoChildRunning(t *testing.T) {
 		s.runner.timeout = tc.timeout
 		ctx, cancel := context.WithCancel(context.Background())
 		if tc.cancel {
-			time.AfterFunc(300*time.Millisecond, cancel)
+			// Cancel once the child exists, not after a fixed delay: under load the
+			// script may not have started it yet, leaving nothing to check.
+			go func() {
+				for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+					if _, err := os.Stat(filepath.Join(bin, "go.child")); err == nil {
+						break
+					}
+				}
+				cancel()
+			}()
 		}
 		_, err := execute(t, s.registry(ExecutePolicy()), ctx, runCall("go", "test", "./..."))
 		cancel()

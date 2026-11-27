@@ -32,6 +32,32 @@ Expected:
 4. Augustin asks to run `go test ./...` again. Approve: the tests pass.
 5. Augustin reports the change and both test results, with their exit codes.
 
+### Harness verification
+
+After any approved edit, Augustin prints a **Harness verification** block below the answer. It is computed from what actually ran, not from the model's words (see ADR 0006).
+
+In a fresh copy of the workspace, ask without mentioning tests:
+
+```
+/mode execute
+Find and fix the bug in the discount calculation.
+```
+
+Expected: Augustin reads `discount.go` and proposes the fix; approve the diff. If the model tries to finish without running the tests, the harness sends it back, and an approval panel for `go test ./...` appears. Approve it: the tests pass and the block shows:
+
+```
+Harness verification
+✓ Verification passed
+Files modified: 1 (discount.go)
+Command: go test ./...
+Exit code: 0
+Tests passed after the last approved edit.
+```
+
+Repeat in another fresh copy and **deny** the `go test ./...` request: nothing runs, no second approval panel appears, and the block shows `✗ Verification rejected — the user declined test execution`.
+
+Repeat with `/mode edit` instead: no test is requested and the block shows `! Verification pending — files modified, tests not run`.
+
 Also check, in a fresh copy: when you deny the first `go test` request, no test result is reported, the activity line shows `! run_command (user_rejected)`, and Augustin explains that it could not run the tests.
 
 Notes:

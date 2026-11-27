@@ -195,16 +195,18 @@ func (r *commandRunner) prepare(_ context.Context, call model.ToolCall) (Prepare
 		return Prepared{}, err
 	}
 	argv := append([]string{exe}, allowedCommands[i].run...)
-	return Prepared{Path: r.w.dir, Command: argv, Apply: func(ctx context.Context) (string, error) {
-		return r.run(ctx, command, args, argv)
+	request := Evidence{Request: append([]string{command}, args...)}
+	return Prepared{Path: r.w.dir, Command: argv, Evidence: request, Apply: func(ctx context.Context) (string, Evidence, error) {
+		return r.run(ctx, request, argv)
 	}}, nil
 }
 
 // run executes exactly argv in the workspace. A non-zero exit or the command
 // timeout is a normal result; cancellation or the turn deadline ends the turn.
-func (r *commandRunner) run(ctx context.Context, command string, args, argv []string) (string, error) {
+func (r *commandRunner) run(ctx context.Context, request Evidence, argv []string) (string, Evidence, error) {
+	command, args := request.Request[0], request.Request[1:]
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return "", request, err
 	}
 	runCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
@@ -219,22 +221,23 @@ func (r *commandRunner) run(ctx context.Context, command string, args, argv []st
 	elapsed := time.Since(start)
 	cleanup()
 	if ctx.Err() != nil {
-		return "", ctx.Err()
+		return "", request, ctx.Err()
 	}
 	if cmd.ProcessState == nil {
-		return "", err // never started
+		return "", request, err // never started
 	}
 	status := "exited"
 	if runCtx.Err() != nil {
 		status = "timeout"
 	}
+	request.Status, request.ExitCode = status, cmd.ProcessState.ExitCode()
 	result, err := json.Marshal(map[string]any{
 		"command": command, "args": args, "executable": argv[0],
 		"exit_code": cmd.ProcessState.ExitCode(), "status": status, "duration_ms": elapsed.Milliseconds(),
 		"stdout": stdout.String(), "stderr": stderr.String(),
 		"stdout_truncated": stdout.truncated(), "stderr_truncated": stderr.truncated(),
 	})
-	return string(result), err
+	return string(result), request, err
 }
 
 // capped keeps the first and last limit/2 bytes of a stream and only counts

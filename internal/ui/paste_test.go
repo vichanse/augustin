@@ -41,10 +41,10 @@ func pasteShell() (shellModel, *[]string) {
 	m.composer.Focus()
 	m.ctx = context.Background()
 	prompts := &[]string{}
-	m.turn = func(_ context.Context, _ []model.Message, prompt string, _ tools.Mode, _ events.Sink) (string, error) {
+	m.turn = textTurn(func(_ context.Context, _ []model.Message, prompt string, _ tools.Mode, _ events.Sink) (string, error) {
 		*prompts = append(*prompts, prompt)
 		return "done", nil
-	}
+	})
 	return m, prompts
 }
 

@@ -13,13 +13,35 @@ var ErrDenied = errors.New("tool permission denied")
 
 type Handler func(context.Context, model.ToolCall) (string, error)
 
+// EvidenceKind says what actually happened to a prepared action.
+type EvidenceKind string
+
+const (
+	EvidenceApplied  EvidenceKind = "applied"  // edit written, or command ran until it exited or timed out
+	EvidenceRejected EvidenceKind = "rejected" // the user refused it: nothing happened
+	EvidenceFailed   EvidenceKind = "failed"   // approved but not completed: canceled, changed file, error
+)
+
+// Evidence is typed metadata produced by the harness where a prepared action
+// runs. It is never parsed from model output or from tool text.
+type Evidence struct {
+	Kind       EvidenceKind
+	Capability Capability
+	Path       string   // edited file
+	Request    []string // allowlisted command and arguments, e.g. go test ./...
+	Status     string   // "exited" or "timeout" for a command that ran
+	ExitCode   int
+}
+
 // Prepared is a validated mutation that has not touched the workspace yet.
 // Apply must re-check the target and apply exactly what Diff shows.
+// Evidence describes the action; Apply returns it completed.
 type Prepared struct {
-	Path    string
-	Diff    string
-	Command []string
-	Apply   func(context.Context) (string, error)
+	Path     string
+	Diff     string
+	Command  []string
+	Evidence Evidence
+	Apply    func(context.Context) (string, Evidence, error)
 }
 
 // Preparer validates a mutating call and computes its effect without side effects.
@@ -30,7 +52,11 @@ type Registry struct {
 	preparers map[string]Preparer
 	allowed   map[string]bool
 	policy    *Policy
+	observe   func(Evidence)
 }
+
+// Observe receives the evidence of every prepared action this registry runs.
+func (r *Registry) Observe(observe func(Evidence)) { r.observe = observe }
 
 // New copies the configuration. Unlisted tools are denied by default.
 func New(handlers map[string]Handler, allowed []string) *Registry {
@@ -82,13 +108,28 @@ func (r *Registry) executePrepared(ctx context.Context, call model.ToolCall, pre
 	if err != nil {
 		return "", err
 	}
+	report := func(kind EvidenceKind, e Evidence) {
+		e.Kind, e.Capability = kind, capability
+		if r.observe != nil {
+			r.observe(e)
+		}
+	}
 	if err := r.policy.approve(ctx, Proposal{Capability: capability, Call: call, Path: prepared.Path, Diff: prepared.Diff, Command: prepared.Command}); err != nil {
+		if errors.Is(err, ErrRejected) {
+			report(EvidenceRejected, prepared.Evidence)
+		}
 		return "", err
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	return prepared.Apply(ctx)
+	out, evidence, err := prepared.Apply(ctx)
+	if err != nil {
+		report(EvidenceFailed, prepared.Evidence)
+		return "", err
+	}
+	report(EvidenceApplied, evidence)
+	return out, nil
 }
 
 // NewWithPreparers is NewWithPolicy plus mutating tools that need preparation.

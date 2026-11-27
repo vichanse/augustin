@@ -33,6 +33,6 @@ Notes:
 
 - Sessions always start read-only; `/mode` cannot change during a turn or while an approval is pending.
 - `augustin run` (headless) never edits.
-- To also run tests after an edit, use `/mode execute` (see [the execute quickstart](execute-quickstart.md)).
+- After an approved edit, a **Harness verification** block says `Verification pending — files modified, tests not run`: edit mode cannot verify. To also run tests after an edit, use `/mode execute` (see [the execute quickstart](execute-quickstart.md)).
 - A change too large to show completely in the terminal cannot be approved; enlarge the terminal or ask for a smaller edit.
 - Do not edit a workspace that another program or editor is writing to (see ADR 0003).

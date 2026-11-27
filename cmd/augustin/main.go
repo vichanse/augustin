@@ -19,6 +19,7 @@ import (
 	"github.com/vichanse/augustin/internal/tools"
 	"github.com/vichanse/augustin/internal/trust"
 	"github.com/vichanse/augustin/internal/ui"
+	"github.com/vichanse/augustin/internal/verification"
 	"github.com/vichanse/augustin/internal/version"
 )
 
@@ -94,18 +95,23 @@ func run(args []string, out, errOut io.Writer) int {
 			}
 			approvals := approval.New()
 			loop := agent.Loop{Provider: p, MaxIterations: c.MaxIterations, Budget: c.Budget, ReserveFinalResponse: true}
-			turn := func(ctx context.Context, history []model.Message, prompt string, mode tools.Mode, sink events.Sink) (string, error) {
+			turn := func(ctx context.Context, history []model.Message, prompt string, mode tools.Mode, sink events.Sink) (ui.TurnResult, error) {
 				messages := append([]model.Message{systemMessage(mode)}, history...)
 				messages = append(messages, model.Message{Role: model.RoleUser, Content: prompt})
 				diagnostic := &turnDiagnostic{sink: sink}
 				current := loop
 				current.Events = diagnostic
-				current.Executor = executorFor(w, mode, approvals)
+				executor := executorFor(w, mode, approvals)
+				tracker := verification.New(mode == tools.ExecuteWithApproval) // harness-owned, per turn
+				executor.Observe(tracker.Record)
+				current.Executor, current.Verification = executor, tracker
 				result, err := current.Run(ctx, codingRequest(messages, mode))
+				out := ui.TurnResult{Verification: result.Verification}
 				if err != nil {
-					return "", fmt.Errorf("%s: %w", diagnostic.summary, err)
+					return out, fmt.Errorf("%s: %w", diagnostic.summary, err)
 				}
-				return result.Messages[len(result.Messages)-1].Content, nil
+				out.Answer = result.Messages[len(result.Messages)-1].Content
+				return out, nil
 			}
 			if err := ui.RunShell(ctx, os.Stdin, out, path, c.Provider, c.Model, ui.ColorEnabled(out, os.LookupEnv), turn, approvals); err != nil {
 				fmt.Fprintln(errOut, "interactive session failed")
@@ -211,7 +217,7 @@ const editCore = "You may change existing files only with edit_file, one exact r
 
 const editRole = "You are Augustin, a coding assistant in edit mode. " + editCore + " You cannot run commands: never claim that tests were run or that a bug is verified fixed; say that tests were not run."
 
-var executeRole = "You are Augustin, a coding assistant in execute mode. " + editCore + " You may also run exactly these commands with run_command, each after user approval: " + strings.Join(tools.AllowedCommands(), "; ") + ". A run returns exit_code, status, stdout and stderr; any exit_code other than 0, or status timeout, means the command failed. Use failures to find and fix the problem. Call run_command directly as well, without asking first in the conversation. When the user asks for tests before and after a fix, run them in that order with tool calls: run_command, then the edit, then run_command again. Do not stop to describe the intended steps instead of executing them. Only say that tests pass if go test ./... returned exit_code 0 after your last edit, and report the actual commands and results."
+var executeRole = "You are Augustin, a coding assistant in execute mode. " + editCore + " You may also run exactly these commands with run_command, each after user approval: " + strings.Join(tools.AllowedCommands(), "; ") + ". A run returns exit_code, status, stdout and stderr; any exit_code other than 0, or status timeout, means the command failed. Use failures to find and fix the problem. Call run_command directly as well, without asking first in the conversation. When the user asks for tests before and after a fix, run them in that order with tool calls: run_command, then the edit, then run_command again. Do not stop to describe the intended steps instead of executing them. The harness independently records whether go test ./... passed after your last edit; if you finish without that evidence, it will ask you to run the tests, and its verdict is shown to the user separately from your answer. Only say that tests pass if go test ./... returned exit_code 0 after your last edit, and report the actual commands and results."
 
 func systemMessage(mode tools.Mode) model.Message {
 	role := readOnlyRole
