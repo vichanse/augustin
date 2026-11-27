@@ -39,6 +39,8 @@ func (r *Registry) Execute(ctx context.Context, call model.ToolCall) (string, er
 	if !r.allowed[call.Name] || handler == nil {
 		return "", fmt.Errorf("%w: %q", ErrDenied, call.Name)
 	}
+	// Freeze the arguments so the handler runs exactly the action that was approved.
+	call.Arguments = append([]byte(nil), call.Arguments...)
 	if r.policy != nil {
 		if err := r.policy.authorize(ctx, call); err != nil {
 			return "", err

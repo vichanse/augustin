@@ -228,6 +228,8 @@ func classifyToolError(err error) (events.Reason, bool) {
 		return events.Canceled, false
 	case errors.Is(err, context.DeadlineExceeded):
 		return events.Deadline, false
+	case errors.Is(err, tools.ErrRejected):
+		return "user_rejected", true // tell the model, which may explain or propose another way
 	case errors.Is(err, tools.ErrDenied), errors.Is(err, tools.ErrSensitivePath):
 		return "permission_denied", false
 	case errors.Is(err, tools.ErrInvalidArguments):

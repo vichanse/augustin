@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vichanse/augustin/internal/approval"
 	"github.com/vichanse/augustin/internal/events"
 
 	"github.com/vichanse/augustin/internal/model"
@@ -71,6 +72,9 @@ type shellModel struct {
 	prompts               []string // submitted this run, oldest first
 	promptIndex           int      // == len(prompts) when not browsing
 	draft                 string   // unsent text saved while browsing
+	approvals             *approval.Broker
+	approval              *approval.Request // pending decision; blocks normal input
+	approvalChoice        int
 	started               time.Time
 	elapsed               time.Duration
 	toolCalls             int
@@ -191,6 +195,7 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.elapsed = time.Since(m.started)
 		m.busy, m.interrupting = false, false
+		m.approval = nil
 		if m.cancelTurn != nil {
 			m.cancelTurn()
 			m.cancelTurn = nil
@@ -215,6 +220,14 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	case approvalUpdate:
+		if e.Open {
+			req := e.Request
+			m.approval, m.approvalChoice = &req, choiceDeny
+		} else if m.approval != nil && m.approval.ID == e.Request.ID {
+			m.approval = nil // withdrawn: canceled, deadline or closed
+		}
+		return m, nil
 	case disarmQuit:
 		m.quitArmed = false
 		return m, nil
@@ -222,6 +235,10 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = e.Width, e.Height
 		m.composer.SetWidth(max(1, e.Width-2))
 	case tea.KeyMsg:
+		// A pending approval owns the keyboard; Ctrl+C keeps its interrupt/exit meaning.
+		if m.approval != nil && e.String() != "ctrl+c" {
+			return m.approvalKey(e), nil
+		}
 		switch e.String() {
 		case "up":
 			// History wins over the slash menu once browsing, so a recalled command cannot trap ↑.
@@ -364,14 +381,11 @@ func (m shellModel) userLine(prompt string) string {
 func (m shellModel) View() string {
 	w := max(1, m.width)
 	rule := m.paint(strings.Repeat("─", w), "240")
-	footer := strings.Join([]string{
-		m.paint("● READ ONLY", "78") + " · Workspace trusted",
-		rule,
-		m.composer.View(),
-		m.commandMenu(),
-		rule,
-		m.keyHint(),
-	}, "\n")
+	input := []string{rule, m.composer.View(), m.commandMenu(), rule}
+	if m.approval != nil {
+		input = []string{m.approvalPanel()}
+	}
+	footer := strings.Join(append(append([]string{m.paint("● READ ONLY", "78") + " · Workspace trusted"}, input...), m.keyHint()), "\n")
 	footer = strings.ReplaceAll(footer, "\n\n", "\n")
 	return lipgloss.NewStyle().MaxWidth(w).Render(m.liveArea() + footer)
 }
@@ -404,8 +418,11 @@ func (m shellModel) liveArea() string {
 	return live
 }
 
-func RunShell(ctx context.Context, in io.Reader, out io.Writer, path, provider, model string, color bool, turn TurnFunc) error {
+// RunShell runs the interactive session. approvals may be nil; when set, the
+// shell answers its requests and closes it on exit, failing pending ones closed.
+func RunShell(ctx context.Context, in io.Reader, out io.Writer, path, provider, model string, color bool, turn TurnFunc, approvals *approval.Broker) error {
 	m := newShellModel(path, provider, model, color)
+	m.approvals = approvals
 	if color {
 		m.mdStyle = markdownStyle(out) // query once, before Bubble Tea owns the terminal input
 	}
@@ -428,6 +445,10 @@ func RunShell(ctx context.Context, in io.Reader, out io.Writer, path, provider, 
 		call:  func(c liveToolCall) { p.Send(c) },
 	}
 	p = tea.NewProgram(m, tea.WithInput(in), tea.WithOutput(out), tea.WithContext(ctx), tea.WithoutSignalHandler())
+	if approvals != nil {
+		approvals.Attach(func(u approval.Update) { p.Send(approvalUpdate(u)) })
+		defer approvals.Close()
+	}
 	_, err := p.Run()
 	return err
 }
@@ -472,6 +493,8 @@ func (m shellModel) interrupt() (tea.Model, tea.Cmd) {
 
 func (m shellModel) keyHint() string {
 	switch {
+	case m.approval != nil:
+		return "↑↓ select · Enter confirm · Esc deny · Ctrl+C interrupt"
 	case m.quitArmed:
 		return "Press Ctrl+C again to exit"
 	case m.interrupting:

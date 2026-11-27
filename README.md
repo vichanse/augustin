@@ -29,6 +29,7 @@ go run ./cmd/augustin --help
 - [Vision](docs/vision.md)
 - [Roadmap](docs/roadmap.md)
 - [Architecture decision](docs/adr/0001-foundation.md)
+- [Interactive approval](docs/adr/0002-interactive-approval.md)
 - [Engineering instructions](AGENTS.md)
 
 ## Contributing
