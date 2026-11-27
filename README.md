@@ -35,6 +35,7 @@ go run ./cmd/augustin --help
 - [Controlled command execution](docs/adr/0004-controlled-command-execution.md)
 - [Execute quickstart](docs/execute-quickstart.md)
 - [Compact paste](docs/adr/0005-compact-paste.md)
+- [Verification gate](docs/adr/0006-verification-gate.md)
 - [Engineering instructions](AGENTS.md)
 
 ## Contributing

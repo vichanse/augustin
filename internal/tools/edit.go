@@ -131,8 +131,10 @@ func (w *Workspace) prepareEdit(ctx context.Context, call model.ToolCall) (Prepa
 		return Prepared{}, ErrDiffTooLarge
 	}
 	sum := sha256.Sum256(data)
-	return Prepared{Path: filepath.ToSlash(path), Diff: diff, Apply: func(ctx context.Context) (string, error) {
-		return w.applyEdit(ctx, path, info, sum, updated, removed, added)
+	target := Evidence{Path: filepath.ToSlash(path)}
+	return Prepared{Path: target.Path, Diff: diff, Evidence: target, Apply: func(ctx context.Context) (string, Evidence, error) {
+		out, err := w.applyEdit(ctx, path, info, sum, updated, removed, added)
+		return out, target, err
 	}}, nil
 }
 

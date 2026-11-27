@@ -126,7 +126,7 @@ func TestEditPermittedBeforePreparation(t *testing.T) {
 	prepared := 0
 	counting := map[string]Preparer{"edit_file": func(context.Context, model.ToolCall) (Prepared, error) {
 		prepared++
-		return Prepared{Apply: func(context.Context) (string, error) { t.Fatal("applied"); return "", nil }}, nil
+		return Prepared{Apply: func(context.Context) (string, Evidence, error) { t.Fatal("applied"); return "", Evidence{}, nil }}, nil
 	}}
 	a := &approver{}
 	read := ReadPolicy()

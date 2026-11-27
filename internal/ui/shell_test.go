@@ -50,12 +50,12 @@ func TestComposerSubmission(t *testing.T) {
 func TestConversationTurn(t *testing.T) {
 	m := newShellModel("/workspace", "openai", "test", false)
 	m.ctx = context.Background()
-	m.turn = func(_ context.Context, history []model.Message, prompt string, _ tools.Mode, _ events.Sink) (string, error) {
+	m.turn = textTurn(func(_ context.Context, history []model.Message, prompt string, _ tools.Mode, _ events.Sink) (string, error) {
 		if len(history) != 0 || prompt != "hello" {
 			t.Fatal("unexpected turn input")
 		}
 		return "world", nil
-	}
+	})
 	m.composer.SetValue("hello")
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd == nil || !next.(shellModel).busy {
@@ -75,7 +75,7 @@ func TestLiveHarnessEvents(t *testing.T) {
 	next, _ = next.Update(liveEvent(events.Event{Kind: events.ModelCompleted, InputTokens: 10, OutputTokens: 5}))
 	next, _ = next.Update(liveEvent(events.Event{Kind: events.ToolFailed, Tool: "list_files", Reason: "directory_required", Recoverable: true}))
 	got := next.(shellModel)
-	if got.toolCalls != 1 || got.tokens != 15 || strings.Join(got.activity, "\n") != "! list_files (directory_required)" {
+	if got.toolCalls != 1 || got.tokens != 15 || strings.Join(got.activity, "\n") != "✗ list_files (directory_required)" {
 		t.Fatalf("unexpected telemetry: %+v", got.activity)
 	}
 }
@@ -117,10 +117,10 @@ func isQuit(cmd tea.Cmd) bool {
 func TestEscapeInterruptsTurn(t *testing.T) {
 	m := newShellModel("/workspace", "openai", "test", false)
 	m.ctx = context.Background()
-	m.turn = func(ctx context.Context, _ []model.Message, _ string, _ tools.Mode, _ events.Sink) (string, error) {
+	m.turn = textTurn(func(ctx context.Context, _ []model.Message, _ string, _ tools.Mode, _ events.Sink) (string, error) {
 		<-ctx.Done()
 		return "", ctx.Err()
-	}
+	})
 	m.composer.SetValue("long task")
 	next, run := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	next, cmd := next.Update(tea.KeyMsg{Type: tea.KeyEsc})
