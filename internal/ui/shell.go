@@ -71,9 +71,11 @@ type shellModel struct {
 	toolLabel             string
 	spinner               spinner.Model
 	mdStyle               string
-	prompts               []string // submitted this run, oldest first
-	promptIndex           int      // == len(prompts) when not browsing
-	draft                 string   // unsent text saved while browsing
+	prompts               []string        // submitted this run, oldest first
+	promptIndex           int             // == len(prompts) when not browsing
+	draft                 string          // unsent text saved while browsing
+	pastes                map[rune]string // pasted blocks by marker rune; see paste.go
+	nextPaste             rune
 	approvals             *approval.Broker
 	mode                  tools.Mode        // local user choice; never changed by the model
 	approval              *approval.Request // pending decision; blocks normal input
@@ -122,6 +124,7 @@ func (m shellModel) Init() tea.Cmd {
 func (m shellModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.update(msg)
 	s := next.(shellModel)
+	s.collectPastes()
 	if s.commandNotice != "" {
 		s.pending = append(s.pending, s.commandNotice)
 		s.commandNotice = ""
@@ -212,12 +215,12 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.composer.SetValue(m.submitted)
 			m.resizeComposer()
 		} else {
-			m.history = append(m.history, model.Message{Role: model.RoleUser, Content: m.submitted}, model.Message{Role: model.RoleAssistant, Content: e.answer})
+			m.history = append(m.history, model.Message{Role: model.RoleUser, Content: m.expand(m.submitted)}, model.Message{Role: model.RoleAssistant, Content: e.answer}) // expanded: the model and saved sessions never see labels
 			if len(m.history) > 20 {
 				m.history = append([]model.Message(nil), m.history[len(m.history)-20:]...)
 			}
 			m.status = ""
-			m.pending = append(m.pending, m.userLine(m.submitted)+"\n"+m.activitySummary(), m.paint("Augustin", "99")+"\n"+m.markdown(e.answer))
+			m.pending = append(m.pending, m.userLine(m.compact(m.submitted))+"\n"+m.activitySummary(), m.paint("Augustin", "99")+"\n"+m.markdown(e.answer))
 			if err := m.saveSession(); err != nil {
 				m.commandNotice = "Cannot save session locally."
 			}
@@ -244,6 +247,11 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A pending approval owns the keyboard; Ctrl+C keeps its interrupt/exit meaning.
 		if m.approval != nil && e.String() != "ctrl+c" {
 			return m.approvalKey(e), nil
+		}
+		// Pastes are text, never keys: Bubble Tea delivers bracketed pastes as
+		// one message whose String() is "[...]", so they match no shortcut.
+		if e.Type == tea.KeyRunes && (e.Paste || hasPasteRune(string(e.Runes))) && m.insertPaste(e.Runes) {
+			return m, nil
 		}
 		switch e.String() {
 		case "up":
@@ -324,11 +332,13 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if value := strings.TrimSpace(m.composer.Value()); value != "" {
 				m.remember(value)
-				if strings.HasPrefix(value, "/") && !strings.Contains(value, "\n") {
+				// Pasted content is user input: a prompt holding a block is never a local command.
+				if strings.HasPrefix(value, "/") && !strings.Contains(value, "\n") && !hasPasteRune(value) {
 					return m.runCommand(value)
 				}
 				m.commandNotice = ""
 				m.submitted = value
+				prompt := m.expand(value)
 				m.composer.Reset()
 				m.resizeComposer()
 				if m.turn != nil {
@@ -346,7 +356,7 @@ func (m shellModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					history := append([]model.Message(nil), m.history...)
 					mode := m.mode // snapshot: a later /mode cannot change a running turn
 					return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
-						answer, err := m.turn(turnCtx, history, value, mode, m.sink)
+						answer, err := m.turn(turnCtx, history, prompt, mode, m.sink)
 						// Providers may surface cancellation as a transport error, so ask the context.
 						return turnDone{answer: answer, err: err, canceled: turnCtx.Err() != nil}
 					})
@@ -400,7 +410,7 @@ func (m shellModel) View() string {
 		}
 		return lipgloss.NewStyle().MaxWidth(w).Render(top + footer)
 	}
-	input := []string{rule, m.composer.View(), m.commandMenu(), rule}
+	input := []string{rule, m.composerView(), m.commandMenu(), rule}
 	footer := strings.Join(append(append([]string{mode}, input...), m.keyHint()), "\n")
 	footer = strings.ReplaceAll(footer, "\n\n", "\n")
 	return lipgloss.NewStyle().MaxWidth(w).Render(m.liveArea() + footer)
@@ -415,7 +425,7 @@ func (m shellModel) liveArea() string {
 		if m.busy {
 			status = m.spinner.View() + " " + status
 		}
-		live = m.userLine(m.submitted) + "\n" + m.activitySummary() + "\n" + status
+		live = m.userLine(m.compact(m.submitted)) + "\n" + m.activitySummary() + "\n" + status
 		if m.partial != "" {
 			preview := m.partialRendered
 			if preview == "" {
