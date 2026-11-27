@@ -33,8 +33,9 @@ var ErrRejected = errors.New("action rejected by user")
 type Proposal struct {
 	Capability Capability
 	Call       model.ToolCall
-	Path       string
-	Diff       string
+	Path       string   // edited file, or the working directory of a command
+	Diff       string   // edits only
+	Command    []string // commands only: resolved executable, then every argument
 }
 
 // Approver must approve the exact action, not merely its tool name.
@@ -120,8 +121,17 @@ func EditPolicy() Policy {
 	return p
 }
 
-// ReadTools and EditTools are the tool allowlists of each mode.
+// ExecutePolicy adds run_command to EditPolicy, each run approved separately.
+func ExecutePolicy() Policy {
+	p := EditPolicy()
+	p.Mode = ExecuteWithApproval
+	p.Capabilities["run_command"] = Execute
+	return p
+}
+
+// ReadTools, EditTools and ExecuteTools are the tool allowlists of each mode.
 var (
-	ReadTools = []string{"read_file", "list_files", "workspace_overview"}
-	EditTools = append(append([]string(nil), ReadTools...), "edit_file")
+	ReadTools    = []string{"read_file", "list_files", "workspace_overview"}
+	EditTools    = append(append([]string(nil), ReadTools...), "edit_file")
+	ExecuteTools = append(append([]string(nil), EditTools...), "run_command")
 )

@@ -99,3 +99,45 @@ func TestTurnUsesModeSnapshot(t *testing.T) {
 		t.Fatalf("turn ran with mode %q", got)
 	}
 }
+
+func TestExecuteModeCommand(t *testing.T) {
+	m := newShellModel(".", "openai", "test", false)
+	run := func(m shellModel, cmd string) shellModel {
+		next, _ := m.runCommand(cmd)
+		return next.(shellModel)
+	}
+	for _, cmd := range []string{"/tools", "/permissions"} {
+		if notice := run(m, cmd).commandNotice; strings.Contains(notice, "run_command") || strings.Contains(notice, "allowlisted commands only") {
+			t.Fatalf("%s in read-only mode mentions execution: %q", cmd, notice)
+		}
+	}
+	edit := run(m, "/mode edit")
+	if strings.Contains(run(edit, "/tools").commandNotice, "run_command") {
+		t.Fatal("edit mode exposes run_command")
+	}
+	m = run(m, "/mode execute")
+	if m.mode != tools.ExecuteWithApproval || !strings.Contains(m.View(), "● EXECUTE") || !strings.Contains(m.commandNotice, "not a sandbox") {
+		t.Fatalf("/mode execute not applied: %q", m.commandNotice)
+	}
+	for cmd, want := range map[string]string{
+		"/tools":       "run_command (approval required per run): go test ./..., go vet ./..., go build ./..., git diff, git status",
+		"/permissions": "Execute: allowlisted commands only",
+		"/status":      "EXECUTE",
+		"/help":        "/mode read-only | edit | execute",
+	} {
+		if got := run(m, cmd).commandNotice; !strings.Contains(got, want) {
+			t.Errorf("%s in execute mode: %q", cmd, got)
+		}
+	}
+	if !strings.Contains(run(m, "/tools").commandNotice, "edit_file") {
+		t.Fatal("execute mode must keep edit_file")
+	}
+	if got := run(m, "/mode read-only"); got.mode != tools.ReadOnly {
+		t.Fatal("cannot leave execute mode")
+	}
+	busy := m
+	busy.busy = true
+	if run(busy, "/mode read-only").mode != tools.ExecuteWithApproval {
+		t.Fatal("mode changed during a turn")
+	}
+}

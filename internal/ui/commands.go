@@ -18,7 +18,7 @@ var slashCommands = []slashCommand{
 	{"/help", "Show available commands"},
 	{"/clear", "Clear conversation"},
 	{"/status", "Show last turn statistics"},
-	{"/mode", "Switch mode: /mode read-only | /mode edit"},
+	{"/mode", "Switch mode: /mode read-only | edit | execute"},
 	{"/model", "Show active model"},
 	{"/version", "Show installed version"},
 	{"/tools", "List available tools"},
@@ -97,17 +97,23 @@ func (m shellModel) runCommand(command string) (tea.Model, tea.Cmd) {
 		m.commandNotice = m.switchMode(command)
 	case "/tools":
 		m.commandNotice = "Read-only tools: workspace_overview, list_files, read_file"
-		if m.mode == tools.EditWithApproval {
+		if m.mode != tools.ReadOnly {
 			m.commandNotice += "\nEdit tools: edit_file (exact replacement, approval required per change)"
 		}
+		if m.mode == tools.ExecuteWithApproval {
+			m.commandNotice += "\nExecute tools: run_command (approval required per run): " + strings.Join(tools.AllowedCommands(), ", ")
+		}
 	case "/permissions":
-		edit := "denied (use /mode edit)"
-		if m.mode == tools.EditWithApproval {
+		edit, execute := "denied (use /mode edit)", "denied (use /mode execute)"
+		if m.mode != tools.ReadOnly {
 			edit = "edit_file only, explicit approval for every change"
 		}
-		m.commandNotice = "Mode: " + modeName(m.mode) + "\nRead: allowed for registered tools\nEdit: " + edit + "\nExecute: denied\nWorkspace trust does not grant additional capabilities."
+		if m.mode == tools.ExecuteWithApproval {
+			execute = "allowlisted commands only, explicit approval for every run; runs local project code"
+		}
+		m.commandNotice = "Mode: " + modeName(m.mode) + "\nRead: allowed for registered tools\nEdit: " + edit + "\nExecute: " + execute + "\nWorkspace trust does not grant additional capabilities."
 	case "/trust":
-		m.commandNotice = "Trusted workspace: " + SafeText(m.path) + "\nTrust does not grant editing; command execution is disabled."
+		m.commandNotice = "Trusted workspace: " + SafeText(m.path) + "\nTrust does not grant editing or command execution."
 	case "/sessions", "/resume", "/rename", "/delete":
 		m.sessionCommand(command)
 	case "/exit":
@@ -119,8 +125,11 @@ func (m shellModel) runCommand(command string) (tea.Model, tea.Cmd) {
 }
 
 func modeName(mode tools.Mode) string {
-	if mode == tools.EditWithApproval {
+	switch mode {
+	case tools.EditWithApproval:
 		return "EDIT"
+	case tools.ExecuteWithApproval:
+		return "EXECUTE"
 	}
 	return "READ ONLY"
 }
@@ -139,7 +148,10 @@ func (m *shellModel) switchMode(command string) string {
 	case "edit":
 		m.mode = tools.EditWithApproval
 		return "Mode: EDIT. Augustin may propose exact replacements with edit_file; each change is shown as a diff and applied only if you approve it. Commands still cannot run."
+	case "execute":
+		m.mode = tools.ExecuteWithApproval
+		return "Mode: EXECUTE. Augustin may also propose allowlisted commands (" + strings.Join(tools.AllowedCommands(), ", ") + "); each run needs your approval. Approved tests and builds run local project code: this is not a sandbox."
 	default:
-		return "Mode: " + modeName(m.mode) + "\nUsage: /mode read-only | /mode edit"
+		return "Mode: " + modeName(m.mode) + "\nUsage: /mode read-only | /mode edit | /mode execute"
 	}
 }

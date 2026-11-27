@@ -215,7 +215,7 @@ func (l Loop) Run(ctx context.Context, req model.Request) (result Result, runErr
 
 func safeToolName(name string) string {
 	switch name {
-	case "read_file", "list_files", "workspace_overview", "edit_file":
+	case "read_file", "list_files", "workspace_overview", "edit_file", "run_command":
 		return name
 	default:
 		return "other"
@@ -244,6 +244,10 @@ func classifyToolError(err error) (events.Reason, bool) {
 		return "not_text_file", true
 	case errors.Is(err, tools.ErrDiffTooLarge):
 		return "diff_too_large", true
+	case errors.Is(err, tools.ErrCommandNotAllowed):
+		return "command_not_allowed", true
+	case errors.Is(err, tools.ErrExecutableNotFound):
+		return "executable_not_found", true
 	case errors.Is(err, tools.ErrInvalidArguments):
 		return "invalid_arguments", true
 	case errors.Is(err, tools.ErrDirectoryRequired):

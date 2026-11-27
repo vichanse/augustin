@@ -23,14 +23,22 @@ const maxFileBytes = 1 << 20
 
 type Workspace struct {
 	root *os.Root
+	dir  string // canonical absolute path: command working directory
 }
 
 func OpenWorkspace(path string) (*Workspace, error) {
-	root, err := os.OpenRoot(path)
+	dir, err := filepath.Abs(path)
+	if err == nil {
+		dir, err = filepath.EvalSymlinks(dir)
+	}
 	if err != nil {
 		return nil, err
 	}
-	return &Workspace{root: root}, nil
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	return &Workspace{root: root, dir: dir}, nil
 }
 
 func (w *Workspace) Close() error {
