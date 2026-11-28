@@ -22,8 +22,9 @@ const (
 
 // goRunner runs go test ./... for the evaluator, outside the agent's tools.
 type goRunner struct {
-	goBin string
-	env   []string
+	goBin   string
+	env     []string
+	timeout time.Duration // 0 means goTestTimeout
 }
 
 // testEnv is the minimal environment for evaluation subprocesses and for the
@@ -63,7 +64,11 @@ func (c *capOutput) Write(p []byte) (int, error) {
 // test runs go test ./... in dir. An error means go itself could not run,
 // which is an infrastructure problem, not a test failure.
 func (g goRunner) test(ctx context.Context, dir string) (testResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, goTestTimeout)
+	timeout := g.timeout
+	if timeout <= 0 {
+		timeout = goTestTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, g.goBin, "test", "-count=1", "./...")
 	var out capOutput

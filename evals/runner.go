@@ -61,6 +61,7 @@ type Runner struct {
 	InputPerMTok   *float64      // USD per million tokens, only when explicitly configured
 	OutputPerMTok  *float64
 	runner         goRunner
+	testTimeout    time.Duration // evaluator go test timeout; 0 means goTestTimeout
 	initialization error
 	once           sync.Once
 }
@@ -72,7 +73,7 @@ func (r *Runner) init() error {
 			r.initialization = fmt.Errorf("go toolchain not found: %w", err)
 			return
 		}
-		r.runner = goRunner{goBin: goBin, env: testEnv(goBin)}
+		r.runner = goRunner{goBin: goBin, env: testEnv(goBin), timeout: r.testTimeout}
 	})
 	return r.initialization
 }
@@ -174,7 +175,7 @@ func (r *Runner) attempt(ctx context.Context, job Job, n int) (a Attempt, err er
 		if err != nil {
 			return infra("cannot run go test on the baseline")
 		}
-		if res.passed || !strings.Contains(res.output, c.BaselineFailure) {
+		if !baselineFails(res, c.BaselineFailure) {
 			return infra("baseline did not fail with the expected failure")
 		}
 	}
@@ -243,6 +244,11 @@ func (r *Runner) attempt(ctx context.Context, job Job, n int) (a Attempt, err er
 		}
 	}
 	a.UnauthorizedChanges += len(added) + len(deleted)
+	if a.UnauthorizedChanges > 0 {
+		// Never run a workspace that changed outside the allowed paths.
+		a.Outcome, a.Detail = PolicyViolation, "files outside the allowed paths were changed"
+		return a, nil
+	}
 	if !c.ReadOnly() {
 		evalDir := filepath.Join(root, "evaluation")
 		if err := copyTree(workspace, evalDir); err != nil {
@@ -251,6 +257,8 @@ func (r *Runner) attempt(ctx context.Context, job Job, n int) (a Attempt, err er
 		visible, err := r.runner.test(ctx, evalDir)
 		if err == nil {
 			a.VisibleTests = verdict(visible)
+		}
+		if err == nil && !visible.timedOut {
 			// Hidden tests exist only in this copy, never in the agent workspace.
 			if err = materialize(dataset, c.Hidden, evalDir); err != nil {
 				return infra("cannot add the hidden tests")
@@ -286,6 +294,8 @@ func classify(c Case, a Attempt, runErr error, providerFailed bool, reads int) (
 		return ProviderError, "the model provider returned an error"
 	case errors.Is(runErr, context.DeadlineExceeded):
 		return Timeout, "the agent run exceeded its time limit"
+	case a.VisibleTests == timedOut || a.HiddenTests == timedOut:
+		return Timeout, "the evaluator tests exceeded their time limit"
 	case errors.Is(runErr, agent.ErrIterationLimit), errors.Is(runErr, agent.ErrBudgetExceeded):
 		return BudgetExhausted, "the agent run exhausted its budget"
 	case runErr != nil:
@@ -328,3 +338,10 @@ func (r *Runner) cost(input, output int) *float64 {
 }
 
 func seconds(d time.Duration) float64 { return float64(d.Milliseconds()) / 1000 }
+
+// baselineFails reports whether the unmodified fixture failed with the
+// declared failure. A run that timed out proves nothing, even if it printed
+// the expected message before hanging.
+func baselineFails(res testResult, want string) bool {
+	return !res.passed && !res.timedOut && strings.Contains(res.output, want)
+}

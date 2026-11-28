@@ -215,6 +215,10 @@ func TestUnauthorizedChangesCannotResolve(t *testing.T) {
 	if a.Outcome != PolicyViolation || a.UnauthorizedChanges != 1 {
 		t.Fatalf("tampered test file: %+v", a)
 	}
+	// Regression: a tampered workspace is never executed by the evaluator.
+	if a.VisibleTests != notRun || a.HiddenTests != notRun {
+		t.Fatalf("evaluator ran a workspace with unauthorized changes: visible=%s hidden=%s", a.VisibleTests, a.HiddenTests)
+	}
 }
 
 // Test 10: every attempt starts from the original fixture.
@@ -437,6 +441,44 @@ func TestDatasetIsValidAndVersioned(t *testing.T) {
 	for _, s := range Scenarios {
 		if !ids[s.Case] {
 			t.Errorf("scenario for unknown case %s", s.Case)
+		}
+	}
+}
+
+// Regression: evaluator tests that hang are a timeout, not an unresolved fix.
+func TestEvaluatorTimeoutIsClassifiedAsTimeout(t *testing.T) {
+	c := caseByID(t, "discount")
+	// Correct for the visible test, but loops forever for the hidden zero-discount case.
+	hangs := func(Target) (model.Provider, error) {
+		return &scripted{steps: []step{read("discount.go"),
+			edit("discount.go", "return price - price*discount/100", "if discount == 0 {\n\t\tfor {\n\t\t}\n\t}\n\treturn price - discount"),
+			say("Fixed.")}}, nil
+	}
+	start := time.Now()
+	a, _ := runOne(t, c, hangs, func(r *Runner) { r.testTimeout = 3 * time.Second })
+	if a.Outcome != Timeout || a.Detail != "the evaluator tests exceeded their time limit" || a.VisibleTests != passed || a.HiddenTests != timedOut {
+		t.Fatalf("evaluator timeout: %+v", a)
+	}
+	if time.Since(start) > time.Minute {
+		t.Fatalf("hanging tests were not stopped: %v", time.Since(start))
+	}
+}
+
+// Regression: a baseline that timed out never proves the expected bug, even
+// if it printed the expected failure before hanging.
+func TestTimedOutBaselineDoesNotSatisfyExpectedFailure(t *testing.T) {
+	want := "FinalPrice(50, 10) = 45, want 40"
+	for name, tc := range map[string]struct {
+		res  testResult
+		want bool
+	}{
+		"expected failure":           {testResult{output: "--- FAIL\n" + want}, true},
+		"timed out after the output": {testResult{output: "--- FAIL\n" + want, timedOut: true}, false},
+		"passed":                     {testResult{passed: true, output: want}, false},
+		"other failure":              {testResult{output: "--- FAIL: something else"}, false},
+	} {
+		if got := baselineFails(tc.res, want); got != tc.want {
+			t.Errorf("%s: got %v, want %v", name, got, tc.want)
 		}
 	}
 }
