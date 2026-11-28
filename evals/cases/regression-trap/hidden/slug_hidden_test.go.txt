@@ -1,0 +1,17 @@
+package slug
+
+import "testing"
+
+func TestHiddenSlug(t *testing.T) {
+	for in, want := range map[string]string{
+		"a   b":             "a-b",
+		"  Go  is   fun  ":  "go-is-fun",
+		"---":               "",
+		"Déjà vu":           "déjà-vu",
+		"v2.0 -- release!!": "v2-0-release",
+	} {
+		if got := Slug(in); got != want {
+			t.Errorf("Slug(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

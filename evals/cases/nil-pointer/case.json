@@ -1,0 +1,11 @@
+{
+  "id": "nil-pointer",
+  "description": "Optional address dereferenced without a nil check.",
+  "prompt": "Greeting panics for users who have no address. An address is optional: when it is missing or has no city, the greeting must leave out the location. Find and fix the bug.",
+  "mode": "execute",
+  "fixture": "cases/nil-pointer/workspace",
+  "hidden": "cases/nil-pointer/hidden",
+  "allowed_paths": ["profile.go"],
+  "baseline_failure": "nil pointer dereference",
+  "timeout_seconds": 300
+}

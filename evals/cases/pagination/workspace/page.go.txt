@@ -1,0 +1,18 @@
+package pagination
+
+// Page returns the items of a page, numbered from 1, with size items per
+// page. It returns nil for pages past the end or invalid arguments.
+func Page(items []string, page, size int) []string {
+	if page < 1 || size < 1 {
+		return nil
+	}
+	start := page * size
+	if start >= len(items) {
+		return nil
+	}
+	end := start + size
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[start:end]
+}

@@ -1,0 +1,21 @@
+package slug
+
+import (
+	"strings"
+	"unicode"
+)
+
+// Slug lowercases s and joins its words with single dashes: any run of
+// characters that are not letters or digits becomes one dash, and the
+// result never starts or ends with a dash.
+func Slug(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+	return b.String()
+}

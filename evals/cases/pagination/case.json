@@ -1,0 +1,11 @@
+{
+  "id": "pagination",
+  "description": "Off-by-one: page numbers start at 1 but the first page is skipped.",
+  "prompt": "Requesting page 1 returns the second page of results. Pages are numbered from 1. Find and fix the bug.",
+  "mode": "execute",
+  "fixture": "cases/pagination/workspace",
+  "hidden": "cases/pagination/hidden",
+  "allowed_paths": ["page.go"],
+  "baseline_failure": "Page(1, 2) =",
+  "timeout_seconds": 300
+}

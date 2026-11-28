@@ -1,0 +1,11 @@
+{
+  "id": "discount",
+  "description": "Discount applied as a percentage instead of an absolute amount.",
+  "prompt": "The tests in this module fail. A discount is an absolute amount subtracted from the price, not a percentage. Find and fix the bug.",
+  "mode": "execute",
+  "fixture": "fixtures/discount-module",
+  "hidden": "cases/discount/hidden",
+  "allowed_paths": ["discount.go"],
+  "baseline_failure": "FinalPrice(50, 10) = 45, want 40",
+  "timeout_seconds": 300
+}

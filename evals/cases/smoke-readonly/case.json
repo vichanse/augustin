@@ -1,0 +1,9 @@
+{
+  "id": "smoke-readonly",
+  "description": "Read-only real-model smoke test: diagnose a bug without editing anything.",
+  "prompt": "Read discount.go and explain the bug in the discount calculation. Do not change any file.",
+  "mode": "read-only",
+  "fixture": "fixtures/buggy-discount",
+  "allowed_paths": [],
+  "timeout_seconds": 120
+}

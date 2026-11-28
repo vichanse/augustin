@@ -1,0 +1,18 @@
+package profile
+
+import "testing"
+
+func TestHiddenGreeting(t *testing.T) {
+	for _, c := range []struct {
+		user User
+		want string
+	}{
+		{User{Name: "Ada", Address: &Address{City: "Paris"}}, "Hello, Ada from Paris"},
+		{User{Name: "Ada", Address: &Address{}}, "Hello, Ada"},
+		{User{Name: "Linus"}, "Hello, Linus"},
+	} {
+		if got := Greeting(c.user); got != c.want {
+			t.Errorf("Greeting(%+v) = %q, want %q", c.user, got, c.want)
+		}
+	}
+}

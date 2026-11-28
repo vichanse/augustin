@@ -1,0 +1,16 @@
+package profile
+
+type Address struct {
+	City string
+}
+
+type User struct {
+	Name    string
+	Address *Address // optional
+}
+
+// Greeting returns "Hello, NAME from CITY", or "Hello, NAME" when the user
+// has no address or no city.
+func Greeting(u User) string {
+	return "Hello, " + u.Name + " from " + u.Address.City
+}

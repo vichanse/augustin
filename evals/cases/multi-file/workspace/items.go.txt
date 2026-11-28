@@ -1,0 +1,15 @@
+package shop
+
+type Item struct {
+	Price    float64
+	Quantity int
+}
+
+// Subtotal sums price times quantity.
+func Subtotal(items []Item) float64 {
+	total := 0.0
+	for _, it := range items {
+		total += it.Price * float64(it.Quantity)
+	}
+	return total
+}
