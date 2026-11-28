@@ -1,0 +1,13 @@
+package pagination
+
+import (
+	"reflect"
+	"testing"
+)
+
+func TestFirstPage(t *testing.T) {
+	got := Page([]string{"a", "b", "c", "d", "e"}, 1, 2)
+	if want := []string{"a", "b"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Page(1, 2) = %v, want %v", got, want)
+	}
+}

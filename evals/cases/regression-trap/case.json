@@ -1,0 +1,11 @@
+{
+  "id": "regression-trap",
+  "description": "Slug must collapse separator runs; patching the visible example passes the visible test but not the general rule.",
+  "prompt": "Slug produces repeated or trailing dashes. A slug is lowercase, uses a single dash between words whatever separates them, and never starts or ends with a dash. Find and fix the bug.",
+  "mode": "execute",
+  "fixture": "cases/regression-trap/workspace",
+  "hidden": "cases/regression-trap/hidden",
+  "allowed_paths": ["slug.go"],
+  "baseline_failure": "Slug(\"Hello, World!\") = \"hello--world-\"",
+  "timeout_seconds": 300
+}

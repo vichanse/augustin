@@ -1,0 +1,14 @@
+package shop
+
+const (
+	freeShippingFrom = 100.0
+	shippingFee      = 5.0
+)
+
+// Shipping returns the shipping fee for an order subtotal.
+func Shipping(subtotal float64) float64 {
+	if subtotal > freeShippingFrom {
+		return 0
+	}
+	return shippingFee
+}

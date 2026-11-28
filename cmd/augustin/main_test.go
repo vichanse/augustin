@@ -7,6 +7,7 @@ import (
 	"errors"
 	"github.com/vichanse/augustin/internal/approval"
 	"github.com/vichanse/augustin/internal/model"
+	"github.com/vichanse/augustin/internal/prompt"
 	"github.com/vichanse/augustin/internal/tools"
 	"os"
 	"path/filepath"
@@ -70,13 +71,13 @@ func TestToolsAndPromptFollowMode(t *testing.T) {
 		}
 		return strings.Join(out, ",")
 	}
-	if got := names(codingRequest(nil, tools.ReadOnly)); strings.Contains(got, "edit_file") {
+	if got := names(prompt.Request(nil, tools.ReadOnly)); strings.Contains(got, "edit_file") {
 		t.Fatalf("read-only request exposes %s", got)
 	}
-	if got := names(codingRequest(nil, tools.EditWithApproval)); !strings.HasSuffix(got, ",edit_file") {
+	if got := names(prompt.Request(nil, tools.EditWithApproval)); !strings.HasSuffix(got, ",edit_file") {
 		t.Fatalf("edit request tools: %s", got)
 	}
-	readOnly, edit := systemMessage(tools.ReadOnly).Content, systemMessage(tools.EditWithApproval).Content
+	readOnly, edit := prompt.System(tools.ReadOnly).Content, prompt.System(tools.EditWithApproval).Content
 	if !strings.Contains(readOnly, "Do not claim to modify files") || strings.Contains(readOnly, "edit_file") {
 		t.Fatal("read-only prompt mentions editing")
 	}
@@ -124,7 +125,7 @@ func TestRunCommandOnlyInInteractiveExecuteMode(t *testing.T) {
 func TestRunCommandExposureFollowsMode(t *testing.T) {
 	names := func(mode tools.Mode) string {
 		var out []string
-		for _, tool := range codingRequest(nil, mode).Tools {
+		for _, tool := range prompt.Request(nil, mode).Tools {
 			out = append(out, tool.Name)
 		}
 		return strings.Join(out, ",")
@@ -135,31 +136,31 @@ func TestRunCommandExposureFollowsMode(t *testing.T) {
 	if got := names(tools.ExecuteWithApproval); !strings.HasSuffix(got, ",edit_file,run_command") {
 		t.Fatalf("execute tools: %s", got)
 	}
-	execute := systemMessage(tools.ExecuteWithApproval).Content
+	execute := prompt.System(tools.ExecuteWithApproval).Content
 	if strings.Contains(execute, "You cannot run commands") || !strings.Contains(execute, "go test ./...") || !strings.Contains(execute, "exit_code 0") {
 		t.Fatalf("execute prompt: %q", execute)
 	}
-	if strings.Contains(systemMessage(tools.EditWithApproval).Content, "run_command") {
+	if strings.Contains(prompt.System(tools.EditWithApproval).Content, "run_command") {
 		t.Fatal("edit prompt mentions run_command")
 	}
 }
 
 func TestPromptsRequireDirectToolCalls(t *testing.T) {
 	for _, mode := range []tools.Mode{tools.EditWithApproval, tools.ExecuteWithApproval} {
-		prompt := systemMessage(mode).Content
+		prompt := prompt.System(mode).Content
 		for _, want := range []string{"call edit_file directly", "never ask for permission in a conversational reply", "never authorizes an action", "never try to bypass"} {
 			if !strings.Contains(prompt, want) {
 				t.Errorf("%s prompt misses %q", mode, want)
 			}
 		}
 	}
-	execute := systemMessage(tools.ExecuteWithApproval).Content
+	execute := prompt.System(tools.ExecuteWithApproval).Content
 	for _, want := range []string{"Call run_command directly", "run_command, then the edit, then run_command again", "Do not stop to describe"} {
 		if !strings.Contains(execute, want) {
 			t.Errorf("execute prompt misses %q", want)
 		}
 	}
-	if strings.Contains(systemMessage(tools.EditWithApproval).Content, "run_command") || strings.Contains(systemMessage(tools.ReadOnly).Content, "edit_file") {
+	if strings.Contains(prompt.System(tools.EditWithApproval).Content, "run_command") || strings.Contains(prompt.System(tools.ReadOnly).Content, "edit_file") {
 		t.Fatal("a prompt mentions a tool its mode does not have")
 	}
 }

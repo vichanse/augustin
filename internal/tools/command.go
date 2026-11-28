@@ -214,7 +214,7 @@ func (r *commandRunner) run(ctx context.Context, request Evidence, argv []string
 	cmd.Dir, cmd.Env = r.w.dir, r.env // stdin stays nil: /dev/null
 	stdout, stderr := &capped{limit: r.limit}, &capped{limit: r.limit}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
-	cleanup := isolate(cmd)
+	cleanup := Isolate(cmd)
 	cmd.WaitDelay = killGrace
 	start := time.Now()
 	err := cmd.Run()

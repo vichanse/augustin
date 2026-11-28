@@ -1,0 +1,19 @@
+package shop
+
+import "testing"
+
+func TestHiddenTotals(t *testing.T) {
+	for _, c := range []struct {
+		items []Item
+		want  float64
+	}{
+		{[]Item{{Price: 99, Quantity: 1}}, 104},
+		{[]Item{{Price: 50, Quantity: 3}}, 150},
+		{nil, 5},
+		{[]Item{{Price: 100, Quantity: 1}}, 100},
+	} {
+		if got := Total(Order{Items: c.items}); got != c.want {
+			t.Errorf("Total(%v) = %v, want %v", c.items, got, c.want)
+		}
+	}
+}

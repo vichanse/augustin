@@ -1,0 +1,10 @@
+package shop
+
+type Order struct {
+	Items []Item
+}
+
+// Total is what the customer pays: items plus shipping.
+func Total(o Order) float64 {
+	return Subtotal(o.Items) + Shipping(Subtotal(o.Items))
+}

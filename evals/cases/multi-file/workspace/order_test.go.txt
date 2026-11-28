@@ -1,0 +1,10 @@
+package shop
+
+import "testing"
+
+func TestFreeShippingAtThreshold(t *testing.T) {
+	o := Order{Items: []Item{{Price: 25, Quantity: 4}}}
+	if got := Total(o); got != 100 {
+		t.Fatalf("Total = %v, want 100", got)
+	}
+}

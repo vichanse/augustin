@@ -36,6 +36,8 @@ go run ./cmd/augustin --help
 - [Execute quickstart](docs/execute-quickstart.md)
 - [Compact paste](docs/adr/0005-compact-paste.md)
 - [Verification gate](docs/adr/0006-verification-gate.md)
+- [Evaluation framework](docs/adr/0007-evaluation-framework.md)
+- [Evaluation quickstart](docs/evaluation-quickstart.md)
 - [Engineering instructions](AGENTS.md)
 
 ## Contributing

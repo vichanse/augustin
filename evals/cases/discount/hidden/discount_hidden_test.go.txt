@@ -1,0 +1,13 @@
+package pricing
+
+import "testing"
+
+func TestHiddenFinalPrice(t *testing.T) {
+	for _, c := range []struct{ price, discount, want float64 }{
+		{100, 25, 75}, {10, 0, 10}, {8.5, 2.5, 6}, {30, 30, 0},
+	} {
+		if got := FinalPrice(c.price, c.discount); got != c.want {
+			t.Errorf("FinalPrice(%v, %v) = %v, want %v", c.price, c.discount, got, c.want)
+		}
+	}
+}

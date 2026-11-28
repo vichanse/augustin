@@ -1,0 +1,11 @@
+{
+  "id": "multi-file",
+  "description": "Free-shipping threshold excludes orders of exactly the threshold; the rule lives in a different file than the total.",
+  "prompt": "An order whose items total exactly 100 is still charged shipping, but orders of 100 or more must ship free. Find the cause and fix it.",
+  "mode": "execute",
+  "fixture": "cases/multi-file/workspace",
+  "hidden": "cases/multi-file/hidden",
+  "allowed_paths": ["order.go", "items.go", "shipping.go"],
+  "baseline_failure": "Total = 105, want 100",
+  "timeout_seconds": 300
+}
